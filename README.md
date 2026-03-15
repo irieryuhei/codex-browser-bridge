@@ -8,9 +8,16 @@ Podman コンテナ内で Codex をフル権限で動かし、ブラウザから
 - ブラウザ viewer から Bridge WebSocket URL を指定して再接続できる
 - ブラウザ viewer から project path / model / open mode を指定して Codex セッションを開始できる
 - 複数会話の一覧を見られる
+- 一覧は最大 10 件ずつ表示し、filter と前へ・次へで辿れる
+- Final answer 到達前の会話は一覧にスピナー表示される
+- 会話を選ぶと URL に session ID が反映される
+- スマートフォン幅では一覧と会話を同時表示せず、戻る操作で一覧へ戻れる
+- `~/.codex/sessions` にある Codex app の既存会話も一覧と履歴で読め、prompt を送ると thread を resume できる
+- ブラウザから開始した session は Codex の thread ID をそのまま使うため、Codex app 側の会話としても見える
 - 会話を pin できる
 - 会話に完了フラグを付けられる
 - 完了会話は一覧でグレー表示される
+- pin / 完了フラグ / project path 候補は server 再起動後も残り、別ブラウザから見ても同じ状態になる
 - 選択中セッションの repo / model / mode を表示できる
 - 新しいメッセージを上に表示する
 - Final answer 到達時に、その turn の途中経過を折りたたみ表示する

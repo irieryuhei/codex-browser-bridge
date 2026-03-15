@@ -107,6 +107,7 @@ class AppServerCodexSession implements CodexSession {
   static async start(options: {
     projectPath: string;
     unrestricted: boolean;
+    threadId?: string;
     model?: string;
     modelReasoningEffort?: string;
     permissionMode?: PermissionMode;
@@ -122,12 +123,16 @@ class AppServerCodexSession implements CodexSession {
     session.startModel = options.model?.trim() ?? "";
     session.startModelReasoningEffort = normalizeModelReasoningEffort(options.modelReasoningEffort);
     session.collaborationMode = options.permissionMode ?? "default";
-    await session.bootstrap(options.projectPath);
+    await session.bootstrap(options.projectPath, options.threadId);
     return session;
   }
 
   onMessage(listener: (message: Record<string, unknown>) => void): void {
     this.messageListener = listener;
+  }
+
+  getSessionId(): string | null {
+    return this.threadId;
   }
 
   sendInput(text: string): void {
@@ -136,6 +141,22 @@ class AppServerCodexSession implements CodexSession {
   }
 
   interrupt(): void {
+    if (this.pendingPlanApproval) {
+      this.pendingPlanApproval = null;
+      this.lastPlanText = "";
+      this.emitMessage({ type: "status", status: "idle" });
+      void this.flushInputQueue();
+      return;
+    }
+
+    if ((this.pendingApprovals.size > 0 || this.pendingUserInputs.size > 0) && !this.activeTurnId) {
+      this.pendingApprovals.clear();
+      this.pendingUserInputs.clear();
+      this.emitMessage({ type: "status", status: "idle" });
+      void this.flushInputQueue();
+      return;
+    }
+
     if (!this.threadId || !this.activeTurnId) {
       return;
     }
@@ -247,7 +268,7 @@ class AppServerCodexSession implements CodexSession {
     this.child.kill("SIGTERM");
   }
 
-  private async bootstrap(projectPath: string): Promise<void> {
+  private async bootstrap(projectPath: string, threadId?: string): Promise<void> {
     await this.request("initialize", {
       clientInfo: {
         name: "codex_browser_bridge",
@@ -261,20 +282,22 @@ class AppServerCodexSession implements CodexSession {
 
     this.notify("initialized", {});
 
-    const threadStart = await this.request("thread/start", {
+    const threadMethod = threadId ? "thread/resume" : "thread/start";
+    const threadStart = await this.request(threadMethod, {
       cwd: projectPath,
+      ...(threadId ? { threadId } : {}),
       approvalPolicy: "never",
       sandbox: "danger-full-access",
       experimentalRawEvents: false,
       persistExtendedHistory: true,
     }) as { thread?: { id?: string } };
 
-    const threadId = threadStart.thread?.id;
-    if (!threadId) {
-      throw new Error("thread/start returned no thread id");
+    const resolvedThreadId = threadStart.thread?.id ?? threadId;
+    if (!resolvedThreadId) {
+      throw new Error(`${threadMethod} returned no thread id`);
     }
 
-    this.threadId = threadId;
+    this.threadId = resolvedThreadId;
     this.emitMessage({ type: "status", status: "idle" });
   }
 
@@ -516,6 +539,13 @@ class AppServerCodexSession implements CodexSession {
 
         this.turnInFlight = false;
         this.activeTurnId = null;
+
+        if (status !== "completed") {
+          this.pendingApprovals.clear();
+          this.pendingUserInputs.clear();
+          this.pendingPlanApproval = null;
+          this.lastPlanText = "";
+        }
 
         if (this.collaborationMode === "plan" && this.lastPlanText) {
           const toolUseId = `plan_${randomUUID()}`;

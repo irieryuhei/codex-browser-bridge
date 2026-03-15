@@ -61,6 +61,11 @@ export function renderViewerHtml(): string {
       overflow: hidden;
     }
 
+    #listPanel {
+      max-height: calc(100vh - 32px);
+      overflow: auto;
+    }
+
     .panel-header {
       padding: 16px 18px 0;
     }
@@ -71,6 +76,49 @@ export function renderViewerHtml(): string {
       letter-spacing: 0.06em;
       text-transform: uppercase;
       color: var(--muted);
+    }
+
+    .session-list-controls {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .session-list-nav {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .session-list-summary {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .advanced-controls {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.46);
+      overflow: hidden;
+    }
+
+    .advanced-controls summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 12px 14px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--muted);
+    }
+
+    .advanced-controls summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .advanced-controls-body {
+      display: grid;
+      gap: 12px;
+      padding: 0 14px 14px;
     }
 
     .controls {
@@ -127,6 +175,10 @@ export function renderViewerHtml(): string {
       flex-wrap: wrap;
     }
 
+    .mobile-only {
+      display: none;
+    }
+
     button {
       border: 0;
       border-radius: 14px;
@@ -175,8 +227,6 @@ export function renderViewerHtml(): string {
       display: grid;
       gap: 10px;
       padding: 16px 18px 18px;
-      max-height: calc(100vh - 360px);
-      overflow: auto;
     }
 
     .session-button {
@@ -212,6 +262,40 @@ export function renderViewerHtml(): string {
       font-size: 15px;
       font-weight: 700;
       color: var(--ink);
+    }
+
+    .session-title-row {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .session-status {
+      width: 24px;
+      min-width: 24px;
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      border: 1px solid rgba(21, 35, 41, 0.12);
+      background: rgba(21, 35, 41, 0.06);
+      color: var(--muted);
+    }
+
+    .session-status-spinner {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      animation: session-status-spin 0.85s linear infinite;
+    }
+
+    @keyframes session-status-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
     }
 
     .session-meta,
@@ -386,6 +470,27 @@ export function renderViewerHtml(): string {
       flex-wrap: wrap;
     }
 
+    .composer-options {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .inline-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    .inline-toggle input {
+      width: auto;
+      margin: 0;
+    }
+
     .hint {
       font-size: 12px;
       color: var(--muted);
@@ -396,8 +501,21 @@ export function renderViewerHtml(): string {
         grid-template-columns: 1fr;
       }
 
+      .layout.mobile-list-open #viewerPanel {
+        display: none;
+      }
+
+      .layout.mobile-viewer-open #listPanel {
+        display: none;
+      }
+
       .sessions {
         max-height: none;
+      }
+
+      #listPanel {
+        max-height: none;
+        overflow: visible;
       }
 
       .viewer {
@@ -411,13 +529,17 @@ export function renderViewerHtml(): string {
       .viewer-title-row {
         flex-direction: column;
       }
+
+      .mobile-only {
+        display: inline-flex;
+      }
     }
   </style>
 </head>
   <body>
   <div class="shell">
     <div class="layout">
-      <section class="panel">
+      <section id="listPanel" class="panel">
         <div class="controls">
           <div class="statusbar">
             <span id="connectionDot" class="dot"></span>
@@ -438,36 +560,47 @@ export function renderViewerHtml(): string {
 
           <label>
             Project path
-            <input id="projectPath" type="text" list="projectPathOptions" placeholder="/workspace/project">
-            <datalist id="projectPathOptions"></datalist>
+            <select id="projectPathPicker" hidden>
+              <option value="">Select a repository</option>
+            </select>
           </label>
 
-          <div class="row">
-            <label>
-              Model
-              <input id="modelInput" type="text" placeholder="Leave empty for Codex default">
-            </label>
-            <label>
-              Reasoning effort
-              <select id="modelReasoningEffort">
-                <option value="minimal">minimal</option>
-                <option value="low">low</option>
-                <option value="medium">medium</option>
-                <option value="high">high</option>
-                <option value="xhigh">xhigh</option>
-              </select>
-            </label>
-          </div>
+          <details id="advancedControls" class="advanced-controls">
+            <summary>Advanced Session Options</summary>
+            <div class="advanced-controls-body">
+              <label>
+                Project path (manual)
+                <input id="projectPath" type="text" placeholder="/workspace/project">
+              </label>
 
-          <div class="row">
-            <label>
-              Open mode
-              <select id="permissionMode">
-                <option value="default">Default</option>
-                <option value="plan">Plan mode</option>
-              </select>
-            </label>
-          </div>
+              <div class="row">
+                <label>
+                  Model
+                  <input id="modelInput" type="text" placeholder="Leave empty for Codex default">
+                </label>
+                <label>
+                  Reasoning effort
+                  <select id="modelReasoningEffort">
+                    <option value="minimal">minimal</option>
+                    <option value="low">low</option>
+                    <option value="medium">medium</option>
+                    <option value="high">high</option>
+                    <option value="xhigh">xhigh</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="row">
+                <label>
+                  Open mode
+                  <select id="permissionMode">
+                    <option value="default">Default</option>
+                    <option value="plan">Plan mode</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          </details>
 
           <div class="button-row">
             <button id="startBtn" class="primary" type="button">Start Session</button>
@@ -476,11 +609,19 @@ export function renderViewerHtml(): string {
 
         <div class="panel-header">
           <h2>Conversation List</h2>
+          <div class="session-list-controls">
+            <input id="sessionFilterInput" type="text" placeholder="Filter conversations">
+            <div class="session-list-nav">
+              <button id="sessionListPrevBtn" class="secondary" type="button" disabled>Prev</button>
+              <button id="sessionListNextBtn" class="secondary" type="button" disabled>Next</button>
+            </div>
+            <div id="sessionListSummary" class="session-list-summary">No conversations yet.</div>
+          </div>
         </div>
         <div id="sessionsList" class="sessions"></div>
       </section>
 
-      <section class="panel viewer">
+      <section id="viewerPanel" class="panel viewer">
         <div class="viewer-head">
           <div class="viewer-title-row">
             <div class="viewer-title-block">
@@ -495,6 +636,7 @@ export function renderViewerHtml(): string {
           </div>
 
           <div class="button-row">
+            <button id="viewerBackBtn" class="secondary mobile-only" type="button" hidden>Back to List</button>
             <button id="viewerPinBtn" class="secondary" type="button" disabled>Pin</button>
             <button id="viewerCompleteBtn" class="secondary" type="button" disabled>Complete</button>
           </div>
@@ -508,6 +650,12 @@ export function renderViewerHtml(): string {
           <div class="composer-actions">
             <button id="sendBtn" class="primary" type="button" disabled>Send</button>
             <button id="interruptBtn" class="secondary" type="button" disabled>Interrupt</button>
+          </div>
+          <div class="composer-options">
+            <label class="inline-toggle">
+              <input id="forceSendToggle" type="checkbox" disabled>
+              Force send now
+            </label>
           </div>
           <div id="composerHint" class="hint">Select a session to start sending messages.</div>
         </div>
@@ -532,19 +680,26 @@ export function renderViewerHtml(): string {
     const bridgeControls = document.getElementById("bridgeControls");
     const connectBtn = document.getElementById("connectBtn");
     const projectPathInput = document.getElementById("projectPath");
-    const projectPathOptions = document.getElementById("projectPathOptions");
+    const projectPathPicker = document.getElementById("projectPathPicker");
     const modelInput = document.getElementById("modelInput");
     const modelReasoningEffortSelect = document.getElementById("modelReasoningEffort");
     const permissionModeSelect = document.getElementById("permissionMode");
     const startBtn = document.getElementById("startBtn");
+    const sessionFilterInput = document.getElementById("sessionFilterInput");
+    const sessionListPrevBtn = document.getElementById("sessionListPrevBtn");
+    const sessionListNextBtn = document.getElementById("sessionListNextBtn");
+    const sessionListSummary = document.getElementById("sessionListSummary");
     const sessionsList = document.getElementById("sessionsList");
     const viewerTitle = document.getElementById("viewerTitle");
     const viewerSubtitle = document.getElementById("viewerSubtitle");
     const viewerRepoBadge = document.getElementById("viewerRepoBadge");
     const viewerModelBadge = document.getElementById("viewerModelBadge");
     const viewerModeBadge = document.getElementById("viewerModeBadge");
+    const viewerBackBtn = document.getElementById("viewerBackBtn");
     const viewerPinBtn = document.getElementById("viewerPinBtn");
     const viewerCompleteBtn = document.getElementById("viewerCompleteBtn");
+    const viewerPanel = document.getElementById("viewerPanel");
+    const listPanel = document.getElementById("listPanel");
     const permissionPanel = document.getElementById("permissionPanel");
     const queuedPanel = document.getElementById("queuedPanel");
     const queuedList = document.getElementById("queuedList");
@@ -552,6 +707,7 @@ export function renderViewerHtml(): string {
     const composerInput = document.getElementById("composerInput");
     const sendBtn = document.getElementById("sendBtn");
     const interruptBtn = document.getElementById("interruptBtn");
+    const forceSendToggle = document.getElementById("forceSendToggle");
     const composerHint = document.getElementById("composerHint");
 
     const state = {
@@ -563,8 +719,10 @@ export function renderViewerHtml(): string {
       outboundQueue: [],
       savedProjectPaths: [],
       hydratedProjectPaths: false,
+      sessionListOffset: 0,
     };
     const STORAGE_KEY = "codex-browser-bridge.viewer";
+    const MAX_VISIBLE_SESSIONS = 10;
 
     function defaultSocketUrl() {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -584,9 +742,7 @@ export function renderViewerHtml(): string {
         }
         return {
           projectPath: typeof parsed.projectPath === "string" ? parsed.projectPath : "",
-          projectPaths: Array.isArray(parsed.projectPaths)
-            ? parsed.projectPaths.filter((entry) => typeof entry === "string")
-            : [],
+          projectPaths: normalizeProjectPaths(parsed.projectPaths),
         };
       } catch {
         return { projectPath: "", projectPaths: [] };
@@ -605,21 +761,67 @@ export function renderViewerHtml(): string {
       if (!normalized) {
         return;
       }
-      state.savedProjectPaths = [
+      state.savedProjectPaths = normalizeProjectPaths([
         normalized,
         ...state.savedProjectPaths.filter((entry) => entry !== normalized),
-      ].slice(0, 12);
+      ]);
       renderProjectPathOptions();
       saveState();
     }
 
+    function normalizeProjectPaths(projectPaths) {
+      if (!Array.isArray(projectPaths)) {
+        return [];
+      }
+      const unique = [];
+      const seen = new Set();
+      projectPaths.forEach((entry) => {
+        const normalized = typeof entry === "string" ? entry.trim() : "";
+        if (!normalized || seen.has(normalized)) {
+          return;
+        }
+        seen.add(normalized);
+        unique.push(normalized);
+      });
+      return unique.slice(0, 12);
+    }
+
     function renderProjectPathOptions() {
-      projectPathOptions.replaceChildren();
-      state.savedProjectPaths.forEach((projectPath) => {
+      const pickerPaths = normalizeProjectPaths([
+        projectPathInput.value,
+        ...state.savedProjectPaths,
+      ]);
+      projectPathPicker.replaceChildren();
+      if (pickerPaths.length === 0) {
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "Select a repository";
+        projectPathPicker.appendChild(placeholder);
+        projectPathPicker.hidden = false;
+        syncProjectPathPicker();
+        return;
+      }
+      pickerPaths.forEach((projectPath) => {
         const option = document.createElement("option");
         option.value = projectPath;
-        projectPathOptions.appendChild(option);
+        option.textContent = shortProject(projectPath) || projectPath;
+        projectPathPicker.appendChild(option);
       });
+      projectPathPicker.hidden = false;
+      syncProjectPathPicker();
+    }
+
+    function syncProjectPathPicker() {
+      const normalized = String(projectPathInput.value || "").trim();
+      if (!normalized || !state.savedProjectPaths.includes(normalized)) {
+        if (Array.from(projectPathPicker.options).some((option) => option.value === normalized)) {
+          projectPathPicker.value = normalized;
+          return;
+        }
+        projectPathPicker.value = projectPathPicker.options[0]?.value ?? "";
+        return;
+      }
+      projectPathPicker.value = normalized;
     }
 
     function send(payload) {
@@ -686,15 +888,76 @@ export function renderViewerHtml(): string {
       updateComposerState();
     }
 
+    function currentUrlSessionId() {
+      const sessionId = new URL(window.location.href).searchParams.get("session");
+      return typeof sessionId === "string" ? sessionId.trim() : "";
+    }
+
+    function syncSessionUrl(sessionId, historyMode) {
+      if (historyMode === "none") {
+        return;
+      }
+      const url = new URL(window.location.href);
+      if (sessionId) {
+        url.searchParams.set("session", sessionId);
+      } else {
+        url.searchParams.delete("session");
+      }
+      const nextUrl = url.pathname + url.search + url.hash;
+      const currentUrl = window.location.pathname + window.location.search + window.location.hash;
+      if (nextUrl === currentUrl) {
+        return;
+      }
+      if (historyMode === "push") {
+        window.history.pushState({ sessionId }, "", nextUrl);
+        return;
+      }
+      window.history.replaceState({ sessionId }, "", nextUrl);
+    }
+
+    function isMobileViewport() {
+      if (typeof window.matchMedia === "function") {
+        return window.matchMedia("(max-width: 980px)").matches;
+      }
+      return window.innerWidth <= 980;
+    }
+
+    function updateResponsiveLayout() {
+      const mobile = isMobileViewport();
+      const hasSelection = !!state.selectedSessionId;
+      const layout = document.querySelector(".layout");
+      if (layout) {
+        layout.classList.toggle("mobile-list-open", mobile && !hasSelection);
+        layout.classList.toggle("mobile-viewer-open", mobile && hasSelection);
+      }
+      viewerBackBtn.hidden = !mobile || !hasSelection;
+    }
+
+    function focusActiveMobilePane() {
+      if (!isMobileViewport()) {
+        return;
+      }
+      const target = state.selectedSessionId ? viewerPanel : listPanel;
+      if (target && typeof target.scrollIntoView === "function") {
+        target.scrollIntoView({ block: "start" });
+      }
+      if (typeof window.scrollTo === "function") {
+        window.scrollTo({ top: 0, behavior: "auto" });
+      }
+    }
+
     function currentSession() {
       return state.sessions.find((session) => session.sessionId === state.selectedSessionId) || null;
     }
 
-    function setSelectedSession(sessionId) {
+    function setSelectedSession(sessionId, options = {}) {
       state.selectedSessionId = sessionId || "";
+      syncSessionUrl(state.selectedSessionId, options.historyMode || "none");
+      updateResponsiveLayout();
+      focusActiveMobilePane();
       renderSessionList();
       renderViewerState();
-      if (state.selectedSessionId) {
+      if (state.selectedSessionId && options.requestHistory !== false) {
         send({ type: "get_history", sessionId: state.selectedSessionId });
       }
     }
@@ -704,6 +967,7 @@ export function renderViewerHtml(): string {
         if (message.projectPath) {
           projectPathInput.value = message.projectPath;
           rememberProjectPath(message.projectPath);
+          syncProjectPathPicker();
         }
         if (typeof message.model === "string") {
           modelInput.value = message.model;
@@ -714,10 +978,8 @@ export function renderViewerHtml(): string {
         if (message.permissionMode === "plan" || message.permissionMode === "default") {
           permissionModeSelect.value = message.permissionMode;
         }
-        state.selectedSessionId = message.sessionId || "";
-        send({ type: "get_history", sessionId: state.selectedSessionId });
+        setSelectedSession(message.sessionId || "", { historyMode: "push", requestHistory: true });
         send({ type: "list_sessions" });
-        renderViewerState();
         return;
       }
 
@@ -737,6 +999,7 @@ export function renderViewerHtml(): string {
           ) {
             projectPathInput.value = state.savedProjectPaths[0];
             saveState();
+            renderProjectPathOptions();
           }
           state.hydratedProjectPaths = true;
         }
@@ -745,7 +1008,8 @@ export function renderViewerHtml(): string {
           state.selectedSessionId
           && !state.sessions.some((session) => session.sessionId === state.selectedSessionId)
         ) {
-          state.selectedSessionId = "";
+          setSelectedSession("", { historyMode: "replace", requestHistory: false });
+          return;
         }
         renderSessionList();
         renderViewerState();
@@ -846,15 +1110,28 @@ export function renderViewerHtml(): string {
 
     function renderSessionList() {
       sessionsList.replaceChildren();
-      if (state.sessions.length === 0) {
+      const filterQuery = normalizedSessionFilter();
+      const filteredSessions = state.sessions.filter((session) => matchesSessionFilter(session, filterQuery));
+      state.sessionListOffset = clampSessionListOffset(state.sessionListOffset, filteredSessions.length);
+      const visibleSessions = filteredSessions.slice(
+        state.sessionListOffset,
+        state.sessionListOffset + MAX_VISIBLE_SESSIONS,
+      );
+      updateSessionListSummary(visibleSessions.length, state.sessions.length, state.sessionListOffset);
+      sessionListPrevBtn.disabled = state.sessionListOffset === 0;
+      sessionListNextBtn.disabled = state.sessionListOffset + MAX_VISIBLE_SESSIONS >= filteredSessions.length;
+
+      if (filteredSessions.length === 0) {
         const empty = document.createElement("div");
         empty.className = "hint";
-        empty.textContent = "No conversations yet.";
+        empty.textContent = state.sessions.length === 0
+          ? "No conversations yet."
+          : "No matching conversations.";
         sessionsList.appendChild(empty);
         return;
       }
 
-      state.sessions.forEach((session) => {
+      visibleSessions.forEach((session) => {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "session-button";
@@ -869,14 +1146,31 @@ export function renderViewerHtml(): string {
           button.classList.add("completed");
         }
 
+        const titleRow = document.createElement("div");
+        titleRow.className = "session-title-row";
+
         const title = document.createElement("div");
         title.className = "session-title";
-        title.textContent = (session.title || session.sessionId) + " ";
-        button.appendChild(title);
+        title.textContent = session.title || session.sessionId;
+        titleRow.appendChild(title);
+
+        if (shouldShowSessionSpinner(session)) {
+          const status = document.createElement("span");
+          status.className = "session-status";
+          status.dataset.sessionSpinner = session.sessionId;
+          status.title = "Processing until final answer";
+          const spinner = document.createElement("span");
+          spinner.className = "session-status-spinner";
+          spinner.setAttribute("aria-hidden", "true");
+          status.appendChild(spinner);
+          titleRow.appendChild(status);
+        }
+
+        button.appendChild(titleRow);
 
         const meta = document.createElement("div");
         meta.className = "session-meta";
-        meta.textContent = sessionMetaLabel(session) ? sessionMetaLabel(session) + " " : "";
+        meta.textContent = sessionMetaLabel(session) ? " " + sessionMetaLabel(session) + " " : "";
         button.appendChild(meta);
 
         const preview = document.createElement("div");
@@ -885,11 +1179,57 @@ export function renderViewerHtml(): string {
         button.appendChild(preview);
 
         button.addEventListener("click", () => {
-          setSelectedSession(session.sessionId);
+          setSelectedSession(session.sessionId, { historyMode: "push", requestHistory: true });
         });
 
         sessionsList.appendChild(button);
       });
+    }
+
+    function normalizedSessionFilter() {
+      return String(sessionFilterInput.value || "").trim().toLowerCase();
+    }
+
+    function matchesSessionFilter(session, query) {
+      if (!query) {
+        return true;
+      }
+      const haystacks = [
+        session.title,
+        session.projectPath,
+        session.preview,
+      ].map((value) => String(value || "").toLowerCase());
+      return haystacks.some((value) => value.includes(query));
+    }
+
+    function clampSessionListOffset(offset, filteredCount) {
+      if (filteredCount <= 0) {
+        return 0;
+      }
+      const lastPageOffset = Math.floor((filteredCount - 1) / MAX_VISIBLE_SESSIONS) * MAX_VISIBLE_SESSIONS;
+      return Math.max(0, Math.min(offset, lastPageOffset));
+    }
+
+    function updateSessionListSummary(visibleCount, totalCount, offset) {
+      if (totalCount === 0) {
+        sessionListSummary.textContent = "No conversations yet.";
+        return;
+      }
+      if (visibleCount === 0) {
+        sessionListSummary.textContent = "Showing 0 of " + totalCount + " conversations";
+        return;
+      }
+      if (offset <= 0) {
+        sessionListSummary.textContent = "Showing " + visibleCount + " of " + totalCount + " conversations";
+        return;
+      }
+      const start = offset + 1;
+      const end = offset + visibleCount;
+      sessionListSummary.textContent = "Showing " + start + "-" + end + " of " + totalCount + " conversations";
+    }
+
+    function shouldShowSessionSpinner(session) {
+      return session.status !== "stopped" && session.answerState === "commentary";
     }
 
     function sessionMetaLabel(session) {
@@ -1095,7 +1435,7 @@ export function renderViewerHtml(): string {
       const session = currentSession();
       const queued = session ? (state.queuedDrafts.get(session.sessionId) || []) : [];
       queuedList.replaceChildren();
-      if (!session || queued.length === 0) {
+      if (!session || queued.length === 0 || !isSessionQueueing(session)) {
         queuedPanel.hidden = true;
         return;
       }
@@ -1107,12 +1447,17 @@ export function renderViewerHtml(): string {
       });
     }
 
+    function isSessionQueueing(session) {
+      return session.status === "running" || session.status === "waiting_approval";
+    }
+
     function updateComposerState() {
       const connected = !!state.socket && state.socket.readyState === WebSocket.OPEN;
       const session = currentSession();
-      composerInput.disabled = !connected || !session || session.status === "stopped";
-      sendBtn.disabled = !connected || !session || session.status === "stopped";
+      composerInput.disabled = !connected || !session;
+      sendBtn.disabled = !connected || !session;
       interruptBtn.disabled = !connected || !session || session.status !== "running";
+      forceSendToggle.disabled = !connected || !session;
 
       if (!session) {
         composerHint.textContent = "Select a session to start sending messages.";
@@ -1123,11 +1468,13 @@ export function renderViewerHtml(): string {
         return;
       }
       if (session.status === "stopped") {
-        composerHint.textContent = "This restored session is read-only. Start a new session to continue.";
+        composerHint.textContent = "This stored session will resume when you send the next prompt.";
         return;
       }
       if (session.status === "running" || session.status === "waiting_approval") {
-        composerHint.textContent = "Prompts sent now will be queued until the current turn settles.";
+        composerHint.textContent = forceSendToggle.checked
+          ? "Force send will submit the next prompt immediately without bridge queueing."
+          : "Prompts sent now will be queued until the current turn settles. Enable Force send now to submit immediately instead.";
         return;
       }
       composerHint.textContent = "Send a new prompt or interrupt the active run.";
@@ -1434,17 +1781,25 @@ export function renderViewerHtml(): string {
       });
     });
 
+    viewerBackBtn.addEventListener("click", () => {
+      setSelectedSession("", { historyMode: "push", requestHistory: false });
+    });
+
     sendBtn.addEventListener("click", () => {
       const session = currentSession();
       const text = composerInput.value.trim();
       if (!session || !text) {
         return;
       }
+      const force = forceSendToggle.checked;
       composerInput.value = "";
+      forceSendToggle.checked = false;
+      updateComposerState();
       send({
         type: "input",
         sessionId: session.sessionId,
         text,
+        ...(force ? { force: true } : {}),
       });
     });
 
@@ -1461,18 +1816,49 @@ export function renderViewerHtml(): string {
 
     const savedState = loadSavedState();
     state.savedProjectPaths = Array.isArray(savedState.projectPaths) ? savedState.projectPaths : [];
-    renderProjectPathOptions();
     projectPathInput.value = savedState.projectPath || state.savedProjectPaths[0] || "/workspace/mserver";
+    renderProjectPathOptions();
     modelInput.value = "gpt-5.4";
     modelReasoningEffortSelect.value = "xhigh";
     bridgeUrlInput.value = defaultSocketUrl();
+    projectPathPicker.addEventListener("change", () => {
+      if (!projectPathPicker.value) {
+        return;
+      }
+      projectPathInput.value = projectPathPicker.value;
+      saveState();
+    });
     projectPathInput.addEventListener("change", () => {
+      renderProjectPathOptions();
       saveState();
     });
     projectPathInput.addEventListener("input", () => {
+      renderProjectPathOptions();
       saveState();
     });
+    sessionFilterInput.addEventListener("input", () => {
+      state.sessionListOffset = 0;
+      renderSessionList();
+    });
+    sessionListPrevBtn.addEventListener("click", () => {
+      state.sessionListOffset = Math.max(0, state.sessionListOffset - MAX_VISIBLE_SESSIONS);
+      renderSessionList();
+    });
+    sessionListNextBtn.addEventListener("click", () => {
+      state.sessionListOffset += MAX_VISIBLE_SESSIONS;
+      renderSessionList();
+    });
+    forceSendToggle.addEventListener("change", () => {
+      updateComposerState();
+    });
+    window.addEventListener("popstate", () => {
+      setSelectedSession(currentUrlSessionId(), { historyMode: "none", requestHistory: !!currentUrlSessionId() });
+    });
+    window.addEventListener("resize", () => {
+      updateResponsiveLayout();
+    });
     ensureSocket();
+    setSelectedSession(currentUrlSessionId(), { historyMode: "replace", requestHistory: false });
   </script>
 </body>
 </html>`;

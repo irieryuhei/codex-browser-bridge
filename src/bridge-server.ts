@@ -3,6 +3,10 @@ import { basename } from "node:path";
 import { createServer, type Server as HttpServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import {
+  getStoredCodexSessionHistory,
+  listStoredCodexSessions,
+} from "./codex-sessions.js";
+import {
   SessionStateStore,
   type PersistedHistoryMessage,
   type PersistedSessionRecord,
@@ -11,8 +15,10 @@ import { renderViewerHtml } from "./viewer-html.js";
 
 export type PermissionMode = "default" | "plan";
 export type SessionStatus = "starting" | "idle" | "running" | "waiting_approval" | "stopped";
+export type SessionAnswerState = "" | "commentary" | "final_answer";
 
 export interface CodexSession {
+  getSessionId(): string | null;
   sendInput(text: string): void;
   interrupt(): void;
   approve(toolUseId?: string, updatedInput?: Record<string, unknown>): void;
@@ -26,6 +32,7 @@ export interface CodexSessionFactory {
   startSession(options: {
     projectPath: string;
     unrestricted: boolean;
+    threadId?: string;
     model?: string;
     modelReasoningEffort?: string;
     permissionMode?: PermissionMode;
@@ -42,6 +49,7 @@ interface StartBridgeServerOptions {
   host?: string;
   codexFactory: CodexSessionFactory;
   stateFilePath?: string;
+  codexSessionRoot?: string | null;
 }
 
 type ClientMessage =
@@ -52,7 +60,7 @@ type ClientMessage =
       modelReasoningEffort?: string;
       permissionMode?: PermissionMode;
     }
-  | { type: "input"; sessionId: string; text: string }
+  | { type: "input"; sessionId: string; text: string; force?: boolean }
   | { type: "interrupt"; sessionId: string }
   | { type: "approve"; sessionId: string; toolUseId?: string; updatedInput?: Record<string, unknown> }
   | { type: "reject"; sessionId: string; toolUseId?: string; message?: string }
@@ -111,6 +119,8 @@ interface SessionRecord {
   sessionId: string;
   projectPath: string;
   title: string;
+  storedPreview: string;
+  storedAnswerState: SessionAnswerState;
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;
@@ -138,6 +148,7 @@ interface SessionSummary {
   pinned: boolean;
   completed: boolean;
   preview: string;
+  answerState: SessionAnswerState;
   queueLength: number;
   pendingPermission?: PendingPermission;
 }
@@ -187,6 +198,71 @@ export async function startBridgeServer(
     recentProjectPaths.splice(0, recentProjectPaths.length, ...next);
   };
 
+  const shouldUseStoredTitle = (title: string, sessionId: string, projectPath: string): boolean => {
+    return !title || title === `Session ${sessionId}` || title === defaultSessionTitle(projectPath);
+  };
+
+  const syncStoredCodexSessions = async (): Promise<void> => {
+    if (options.codexSessionRoot === null) {
+      return;
+    }
+    const storedSessions = await listStoredCodexSessions(options.codexSessionRoot);
+
+    storedSessions.forEach((stored) => {
+      rememberProjectPath(stored.projectPath);
+      const existing = sessions.get(stored.sessionId);
+      if (existing) {
+        existing.projectPath ||= stored.projectPath;
+        if (shouldUseStoredTitle(existing.title, existing.sessionId, stored.projectPath)) {
+          existing.title = stored.title;
+        }
+        if (!summarizeSessionPreview(existing)) {
+          existing.storedPreview = stored.preview;
+        }
+        if (!existing.history.length) {
+          existing.storedAnswerState = stored.answerState;
+        }
+        existing.createdAt ||= stored.createdAt;
+        if (!existing.updatedAt || Date.parse(stored.updatedAt) > Date.parse(existing.updatedAt)) {
+          existing.updatedAt = stored.updatedAt;
+        }
+        if (!existing.model) {
+          existing.model = stored.model;
+        }
+        if (!existing.modelReasoningEffort) {
+          existing.modelReasoningEffort = stored.modelReasoningEffort;
+        }
+        if (existing.permissionMode !== "plan") {
+          existing.permissionMode = stored.permissionMode;
+        }
+        if (!existing.codexSession) {
+          existing.status = "stopped";
+        }
+        return;
+      }
+
+      sessions.set(stored.sessionId, {
+        sessionId: stored.sessionId,
+        projectPath: stored.projectPath,
+        title: stored.title,
+        storedPreview: stored.preview,
+        storedAnswerState: stored.answerState,
+        status: "stopped",
+        createdAt: stored.createdAt,
+        updatedAt: stored.updatedAt,
+        model: stored.model,
+        modelReasoningEffort: stored.modelReasoningEffort,
+        permissionMode: stored.permissionMode,
+        pinned: false,
+        completed: false,
+        codexSession: null,
+        history: [],
+        queuedInputs: [],
+        pendingPermission: null,
+      });
+    });
+  };
+
   const httpServer = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -224,7 +300,8 @@ export async function startBridgeServer(
     permissionMode: session.permissionMode,
     pinned: session.pinned,
     completed: session.completed,
-    preview: summarizeSessionPreview(session),
+    preview: summarizeSessionPreview(session) || session.storedPreview,
+    answerState: summarizeSessionAnswerState(session),
     queueLength: session.queuedInputs.length,
     ...(session.pendingPermission ? { pendingPermission: session.pendingPermission } : {}),
   });
@@ -250,7 +327,7 @@ export async function startBridgeServer(
     void persistSessions();
   };
 
-  const dispatchQueuedInput = (session: SessionRecord): void => {
+  const dispatchPendingInput = (session: SessionRecord): void => {
     if (session.status !== "idle") {
       return;
     }
@@ -282,6 +359,43 @@ export async function startBridgeServer(
     session.codexSession?.sendInput(trimmed);
   };
 
+  const attachLiveCodexSession = (session: SessionRecord, codexSession: CodexSession): void => {
+    session.codexSession = codexSession;
+    session.status = "idle";
+    session.pendingPermission = null;
+    codexSession.onMessage((serverMessage) => {
+      const active = sessions.get(session.sessionId);
+      if (!active) {
+        return;
+      }
+      handleSessionMessage(active, serverMessage);
+    });
+  };
+
+  const resumeStoppedSession = async (session: SessionRecord): Promise<void> => {
+    if (session.codexSession) {
+      return;
+    }
+    const codexSession = await options.codexFactory.startSession({
+      projectPath: session.projectPath,
+      unrestricted: true,
+      threadId: session.sessionId,
+      model: normalizeModel(session.model),
+      modelReasoningEffort: normalizeModelReasoningEffort(session.modelReasoningEffort),
+      permissionMode: normalizePermissionMode(session.permissionMode),
+    });
+    attachLiveCodexSession(session, codexSession);
+    const timestamp = new Date().toISOString();
+    broadcast({
+      type: "status",
+      sessionId: session.sessionId,
+      status: "idle",
+      timestamp,
+    });
+    broadcastSessionList();
+    void persistSessions();
+  };
+
   const handleSessionMessage = (session: SessionRecord, message: Record<string, unknown>): void => {
     const timestamp = new Date().toISOString();
 
@@ -296,7 +410,7 @@ export async function startBridgeServer(
       });
       broadcastSessionList();
       if (session.status === "idle") {
-        dispatchQueuedInput(session);
+        dispatchPendingInput(session);
       }
       return;
     }
@@ -332,20 +446,25 @@ export async function startBridgeServer(
       }
 
       if (message.type === "list_sessions") {
+        await syncStoredCodexSessions();
         send(ws, buildSessionListPayload());
         return;
       }
 
       if (message.type === "get_history") {
+        await syncStoredCodexSessions();
         const session = sessions.get(message.sessionId);
         if (!session) {
           send(ws, { type: "error", message: `Session ${message.sessionId} was not found.` });
           return;
         }
+        const storedHistory = session.codexSession || options.codexSessionRoot === null
+          ? []
+          : await getStoredCodexSessionHistory(message.sessionId, options.codexSessionRoot);
         send(ws, {
           type: "history",
           sessionId: session.sessionId,
-          messages: session.history,
+          messages: storedHistory.length > 0 ? storedHistory : session.history,
         });
         return;
       }
@@ -373,10 +492,13 @@ export async function startBridgeServer(
 
           const now = new Date().toISOString();
           rememberProjectPath(projectPath);
+          const sessionId = codexSession.getSessionId() || randomUUID().slice(0, 8);
           const session: SessionRecord = {
-            sessionId: randomUUID().slice(0, 8),
+            sessionId,
             projectPath,
             title: defaultSessionTitle(projectPath),
+            storedPreview: "",
+            storedAnswerState: "",
             status: "idle",
             createdAt: now,
             updatedAt: now,
@@ -392,13 +514,7 @@ export async function startBridgeServer(
           };
 
           sessions.set(session.sessionId, session);
-          codexSession.onMessage((serverMessage) => {
-            const active = sessions.get(session.sessionId);
-            if (!active) {
-              return;
-            }
-            handleSessionMessage(active, serverMessage);
-          });
+          attachLiveCodexSession(session, codexSession);
 
           send(ws, {
             type: "system",
@@ -432,19 +548,46 @@ export async function startBridgeServer(
         return;
       }
 
-      if (!session.codexSession && message.type !== "set_session_pin" && message.type !== "set_session_completion") {
-        send(ws, {
-          type: "error",
-          message: `Session ${message.sessionId} is restored history only.`,
-        });
-        return;
-      }
-
       switch (message.type) {
         case "input": {
           const text = message.text.trim();
           if (!text) {
             send(ws, { type: "error", message: "Prompt text is required." });
+            return;
+          }
+
+          if (!session.codexSession) {
+            try {
+              await resumeStoppedSession(session);
+            } catch (error) {
+              send(ws, {
+                type: "error",
+                message: error instanceof Error ? error.message : String(error),
+              });
+              return;
+            }
+          }
+
+          const liveSession = session.codexSession;
+          if (!liveSession) {
+            send(ws, {
+              type: "error",
+              message: `Session ${message.sessionId} could not be resumed.`,
+            });
+            return;
+          }
+
+          if (message.force === true && session.status !== "idle") {
+            dispatchSessionInput(session, text);
+            send(ws, {
+              type: "input_ack",
+              sessionId: session.sessionId,
+              queued: false,
+              text,
+              force: true,
+            });
+            broadcastSessionList();
+            void persistSessions();
             return;
           }
 
@@ -551,6 +694,7 @@ export async function startBridgeServer(
   const persistedState = await stateStore.load();
   recentProjectPaths.splice(0, recentProjectPaths.length, ...persistedState.recentProjectPaths);
   persistedState.sessions.forEach((restored) => {
+    const restoredHistory = fromPersistedHistory(restored.history);
     if (!recentProjectPaths.includes(restored.projectPath)) {
       rememberProjectPath(restored.projectPath);
     }
@@ -558,6 +702,8 @@ export async function startBridgeServer(
       sessionId: restored.sessionId,
       projectPath: restored.projectPath,
       title: restored.title,
+      storedPreview: "",
+      storedAnswerState: "",
       status: "stopped",
       createdAt: restored.createdAt,
       updatedAt: restored.updatedAt,
@@ -567,11 +713,12 @@ export async function startBridgeServer(
       pinned: restored.pinned,
       completed: restored.completed,
       codexSession: null,
-      history: fromPersistedHistory(restored.history),
+      history: restoredHistory,
       queuedInputs: [],
       pendingPermission: null,
     });
   });
+  await syncStoredCodexSessions();
   const address = httpServer.address();
   if (!address || typeof address === "string") {
     throw new Error("Failed to determine listening port");
@@ -629,7 +776,12 @@ function parseClientMessage(raw: string): ClientMessage | null {
     }
 
     if (data.type === "input" && typeof data.sessionId === "string" && typeof data.text === "string") {
-      return { type: "input", sessionId: data.sessionId, text: data.text };
+      return {
+        type: "input",
+        sessionId: data.sessionId,
+        text: data.text,
+        ...(data.force === true ? { force: true } : {}),
+      };
     }
 
     if (data.type === "interrupt" && typeof data.sessionId === "string") {
@@ -983,6 +1135,36 @@ function summarizeSessionPreview(session: SessionRecord): string {
     }
   }
   return "";
+}
+
+function summarizeSessionAnswerState(session: SessionRecord): SessionAnswerState {
+  let answerState = session.storedAnswerState;
+
+  for (const item of session.history) {
+    if (item.type === "user") {
+      answerState = "commentary";
+      continue;
+    }
+    if (item.type === "assistant") {
+      if (item.message.phase === "final_answer") {
+        answerState = "final_answer";
+        continue;
+      }
+      if (item.message.phase === "commentary" || item.message.content.length > 0) {
+        answerState = "commentary";
+      }
+      continue;
+    }
+    if (item.type === "thinking_delta" || item.type === "stream_delta" || item.type === "tool_result") {
+      answerState = "commentary";
+      continue;
+    }
+    if (item.type === "error") {
+      answerState = "";
+    }
+  }
+
+  return answerState;
 }
 
 function collapseWhitespace(value: string): string {

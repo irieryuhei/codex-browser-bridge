@@ -75,6 +75,7 @@ describe("startBridgeServer", () => {
   it("serves the expanded viewer shell at GET /", async () => {
     const server = await startBridgeServer({
       port: 0,
+      codexSessionRoot: null,
       codexFactory: { startSession: async () => new FakeCodexSession() },
     });
     servers.push(server);
@@ -106,7 +107,7 @@ describe("startBridgeServer", () => {
       },
     };
 
-    const server = await startBridgeServer({ port: 0, codexFactory: factory });
+    const server = await startBridgeServer({ port: 0, codexSessionRoot: null, codexFactory: factory });
     servers.push(server);
 
     const ws = new WebSocket(`ws://127.0.0.1:${server.port}`);
@@ -163,6 +164,7 @@ describe("startBridgeServer", () => {
           permissionMode: "plan",
           pinned: false,
           completed: false,
+          answerState: "",
         }),
       ],
     });
@@ -214,6 +216,7 @@ describe("startBridgeServer", () => {
             status: "stopped",
             model: "gpt-5.4",
             modelReasoningEffort: "xhigh",
+            answerState: "final_answer",
           }),
         ],
       });
@@ -240,10 +243,77 @@ describe("startBridgeServer", () => {
     }
   });
 
+  it("resumes a stored session when a new prompt is sent", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "codex-browser-bridge-resume-"));
+    const codexSessionRoot = join(tempRoot, "sessions");
+    const calls: Array<Record<string, unknown>> = [];
+    const resumedSession = new FakeCodexSession("thread_external");
+    try {
+      await writeCodexSessionFile(codexSessionRoot, {
+        threadId: "thread_external",
+        projectPath: "/workspace/external",
+        model: "gpt-5.4",
+        reasoningEffort: "xhigh",
+        userText: "External hello",
+        assistantText: "External reply",
+      });
+
+      const server = await startBridgeServer({
+        port: 0,
+        codexSessionRoot,
+        codexFactory: {
+          startSession: async (options) => {
+            calls.push(options);
+            return resumedSession;
+          },
+        },
+      });
+      servers.push(server);
+
+      const ws = new WebSocket(`ws://127.0.0.1:${server.port}`);
+      await once(ws, "open");
+
+      ws.send(JSON.stringify({ type: "list_sessions" }));
+      await waitForMessage(ws, (msg) => {
+        return msg.type === "session_list"
+          && Array.isArray(msg.sessions)
+          && msg.sessions.some((entry: Record<string, unknown>) => entry.sessionId === "thread_external");
+      });
+
+      ws.send(JSON.stringify({
+        type: "input",
+        sessionId: "thread_external",
+        text: "Continue the work",
+      }));
+
+      const ack = await waitForMessage(ws, (msg) => msg.type === "input_ack");
+      expect(ack).toEqual({
+        type: "input_ack",
+        sessionId: "thread_external",
+        queued: false,
+        text: "Continue the work",
+      });
+      expect(calls).toEqual([{
+        projectPath: "/workspace/external",
+        unrestricted: true,
+        model: "gpt-5.4",
+        modelReasoningEffort: "xhigh",
+        permissionMode: "default",
+        threadId: "thread_external",
+      }]);
+      expect(resumedSession.inputs).toEqual(["Continue the work"]);
+
+      ws.close();
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("queues prompts while a session is still running and dispatches them after idle", async () => {
     let session: FakeCodexSession | undefined;
     const server = await startBridgeServer({
       port: 0,
+      codexSessionRoot: null,
       codexFactory: {
         startSession: async () => {
           session = new FakeCodexSession();
@@ -313,10 +383,94 @@ describe("startBridgeServer", () => {
     ws.close();
   });
 
+  it("dispatches force-sent prompts immediately without interrupting the active turn", async () => {
+    let session: FakeCodexSession | undefined;
+    const server = await startBridgeServer({
+      port: 0,
+      codexSessionRoot: null,
+      codexFactory: {
+        startSession: async () => {
+          session = new FakeCodexSession();
+          return session;
+        },
+      },
+    });
+    servers.push(server);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    await once(ws, "open");
+    ws.send(JSON.stringify({ type: "start", projectPath: "/workspace/app" }));
+    const created = await waitForMessage(ws, (msg) => {
+      return msg.type === "system" && msg.subtype === "session_created";
+    });
+
+    if (!session) {
+      throw new Error("expected session");
+    }
+
+    session.emit({ type: "status", status: "running" });
+    await waitForMessage(ws, (msg) => msg.type === "status" && msg.status === "running");
+
+    ws.send(JSON.stringify({
+      type: "input",
+      sessionId: created.sessionId,
+      text: "queued prompt",
+    }));
+    await waitForMessage(ws, (msg) => {
+      return msg.type === "input_ack" && msg.queued === true && msg.text === "queued prompt";
+    });
+
+    ws.send(JSON.stringify({
+      type: "input",
+      sessionId: created.sessionId,
+      text: "force prompt",
+      force: true,
+    }));
+
+    const forcedAck = await waitForMessage(ws, (msg) => {
+      return msg.type === "input_ack" && msg.queued === false && msg.text === "force prompt";
+    });
+
+    expect(forcedAck).toEqual({
+      type: "input_ack",
+      sessionId: created.sessionId,
+      queued: false,
+      text: "force prompt",
+      force: true,
+    });
+    expect(session.interrupted).toBe(false);
+    expect(session.inputs).toEqual(["force prompt"]);
+
+    ws.send(JSON.stringify({ type: "get_history", sessionId: created.sessionId }));
+    const historyBeforeIdle = await waitForMessage(ws, (msg) => {
+      return msg.type === "history" && Array.isArray(msg.messages) && msg.messages.length > 0;
+    });
+    expect(historyBeforeIdle).toMatchObject({
+      type: "history",
+      sessionId: created.sessionId,
+      messages: [
+        expect.objectContaining({
+          type: "user",
+          sessionId: created.sessionId,
+          text: "force prompt",
+        }),
+      ],
+    });
+
+    session.emit({ type: "status", status: "idle" });
+
+    await vi.waitFor(() => {
+      expect(session?.inputs).toEqual(["force prompt", "queued prompt"]);
+    });
+
+    ws.close();
+  });
+
   it("accepts the first prompt immediately after session creation", async () => {
     let session: FakeCodexSession | undefined;
     const server = await startBridgeServer({
       port: 0,
+      codexSessionRoot: null,
       codexFactory: {
         startSession: async () => {
           session = new FakeCodexSession();
@@ -356,6 +510,7 @@ describe("startBridgeServer", () => {
     let session: FakeCodexSession | undefined;
     const server = await startBridgeServer({
       port: 0,
+      codexSessionRoot: null,
       codexFactory: {
         startSession: async () => {
           session = new FakeCodexSession();
@@ -424,6 +579,7 @@ describe("startBridgeServer", () => {
           preview: "Here is the answer.",
           pinned: true,
           completed: true,
+          answerState: "final_answer",
         }),
       ],
     });
@@ -435,6 +591,7 @@ describe("startBridgeServer", () => {
     let session: FakeCodexSession | undefined;
     const server = await startBridgeServer({
       port: 0,
+      codexSessionRoot: null,
       codexFactory: {
         startSession: async () => {
           session = new FakeCodexSession();
@@ -507,10 +664,90 @@ describe("startBridgeServer", () => {
     wsB.close();
   });
 
+  it("marks session summaries as commentary until a final answer is received", async () => {
+    let session: FakeCodexSession | undefined;
+    const server = await startBridgeServer({
+      port: 0,
+      codexSessionRoot: null,
+      codexFactory: {
+        startSession: async () => {
+          session = new FakeCodexSession();
+          return session;
+        },
+      },
+    });
+    servers.push(server);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}`);
+    await once(ws, "open");
+    ws.send(JSON.stringify({ type: "start", projectPath: "/workspace/app" }));
+    const created = await waitForMessage(ws, (msg) => {
+      return msg.type === "system" && msg.subtype === "session_created";
+    });
+
+    ws.send(JSON.stringify({
+      type: "input",
+      sessionId: created.sessionId,
+      text: "Explain the repo",
+    }));
+    await waitForMessage(ws, (msg) => msg.type === "input_ack" && msg.queued === false);
+
+    ws.send(JSON.stringify({ type: "list_sessions" }));
+    const commentarySummary = await waitForMessage(ws, (msg) => {
+      if (msg.type !== "session_list" || !Array.isArray(msg.sessions)) {
+        return false;
+      }
+      const current = msg.sessions.find((entry: Record<string, unknown>) => entry.sessionId === created.sessionId);
+      return current?.answerState === "commentary";
+    });
+    expect(commentarySummary).toMatchObject({
+      sessions: [
+        expect.objectContaining({
+          sessionId: created.sessionId,
+          answerState: "commentary",
+        }),
+      ],
+    });
+
+    if (!session) {
+      throw new Error("expected session");
+    }
+    session.emit({
+      type: "assistant",
+      message: {
+        id: "msg_final",
+        role: "assistant",
+        content: [{ type: "text", text: "Final reply" }],
+        model: "gpt-5.4",
+        phase: "final_answer",
+      },
+    });
+
+    ws.send(JSON.stringify({ type: "list_sessions" }));
+    const finalSummary = await waitForMessage(ws, (msg) => {
+      if (msg.type !== "session_list" || !Array.isArray(msg.sessions)) {
+        return false;
+      }
+      const current = msg.sessions.find((entry: Record<string, unknown>) => entry.sessionId === created.sessionId);
+      return current?.answerState === "final_answer";
+    });
+    expect(finalSummary).toMatchObject({
+      sessions: [
+        expect.objectContaining({
+          sessionId: created.sessionId,
+          answerState: "final_answer",
+        }),
+      ],
+    });
+
+    ws.close();
+  });
+
   it("surfaces plan approvals in the session summary and relays approve actions", async () => {
     let session: FakeCodexSession | undefined;
     const server = await startBridgeServer({
       port: 0,
+      codexSessionRoot: null,
       codexFactory: {
         startSession: async () => {
           session = new FakeCodexSession();
@@ -586,6 +823,7 @@ describe("startBridgeServer", () => {
       let session: FakeCodexSession | undefined;
       const firstServer = await startBridgeServer({
         port: 0,
+        codexSessionRoot: null,
         stateFilePath,
         codexFactory: {
           startSession: async () => {
@@ -645,9 +883,10 @@ describe("startBridgeServer", () => {
 
       const secondServer = await startBridgeServer({
         port: 0,
+        codexSessionRoot: null,
         stateFilePath,
         codexFactory: {
-          startSession: async () => new FakeCodexSession(),
+          startSession: async () => new FakeCodexSession(created.sessionId),
         },
       });
       servers.push(secondServer);
@@ -697,15 +936,19 @@ describe("startBridgeServer", () => {
       ws2.send(JSON.stringify({
         type: "input",
         sessionId: created.sessionId,
-        text: "should fail",
+        text: "resume after restart",
       }));
-      const restoredError = await waitForMessage(ws2, (msg) => msg.type === "error");
-      expect(restoredError).toEqual({
-        type: "error",
-        message: `Session ${created.sessionId} is restored history only.`,
+      const restoredAck = await waitForMessage(ws2, (msg) => msg.type === "input_ack");
+      expect(restoredAck).toEqual({
+        type: "input_ack",
+        sessionId: created.sessionId,
+        queued: false,
+        text: "resume after restart",
       });
 
       ws2.close();
+      await secondServer.close();
+      servers.pop();
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }

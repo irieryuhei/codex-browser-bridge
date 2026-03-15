@@ -106,6 +106,38 @@ describe("codex-process", () => {
     session.stop();
   });
 
+  it("resumes an existing thread when threadId is provided", async () => {
+    const factory = createCodexSessionFactory();
+    const startPromise = factory.startSession({
+      projectPath: "/tmp/project-resume",
+      unrestricted: true,
+      threadId: "thr_resume",
+    });
+    const child = fakeChildren[0];
+
+    await tick();
+    const initReq = nextOutgoingRequest(child);
+    child.stdout.emit("data", `${JSON.stringify({ id: initReq.id, result: {} })}\n`);
+    await tick();
+    expect(nextOutgoingNotification(child)).toMatchObject({ method: "initialized" });
+    const threadReq = nextOutgoingRequest(child);
+    expect(threadReq).toMatchObject({
+      method: "thread/resume",
+      params: {
+        cwd: "/tmp/project-resume",
+        threadId: "thr_resume",
+      },
+    });
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({ id: threadReq.id, result: { thread: { id: "thr_resume" } } })}\n`,
+    );
+
+    const session = await startPromise;
+    expect(session.getSessionId()).toBe("thr_resume");
+    session.stop();
+  });
+
   it("emits AskUserQuestion requests and answers them over JSON-RPC", async () => {
     const factory = createCodexSessionFactory();
     const startPromise = factory.startSession({
@@ -167,6 +199,74 @@ describe("codex-process", () => {
             answer: "Fast",
           },
         ],
+      },
+    });
+
+    session.stop();
+  });
+
+  it("clears request-user-input waiting state after an interrupt so the next prompt can start", async () => {
+    const factory = createCodexSessionFactory();
+    const startPromise = factory.startSession({
+      projectPath: "/tmp/project-question-interrupt",
+      unrestricted: true,
+    });
+    const child = fakeChildren[0];
+
+    await bootstrapSession(child, "thr_question_interrupt");
+    const session = await startPromise;
+
+    session.sendInput("First prompt");
+    await tick();
+    const turnReq = nextOutgoingRequest(child);
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({ id: turnReq.id, result: { turn: { id: "turn_question_interrupt" } } })}\n`,
+    );
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({ method: "turn/started", params: { turn: { id: "turn_question_interrupt" } } })}\n`,
+    );
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        id: 91,
+        method: "item/tool/requestUserInput",
+        params: {
+          itemId: "ask_interrupt",
+          questions: [{ id: "q_1", question: "How should I proceed?" }],
+        },
+      })}\n`,
+    );
+
+    session.interrupt();
+    await tick();
+
+    expect(nextOutgoingRequest(child)).toMatchObject({
+      method: "turn/interrupt",
+      params: {
+        threadId: "thr_question_interrupt",
+        turnId: "turn_question_interrupt",
+      },
+    });
+
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        method: "turn/completed",
+        params: { turn: { id: "turn_question_interrupt", status: "interrupted" } },
+      })}\n`,
+    );
+    await tick();
+
+    session.sendInput("Second prompt");
+    await tick();
+
+    expect(nextOutgoingRequest(child)).toMatchObject({
+      method: "turn/start",
+      params: {
+        threadId: "thr_question_interrupt",
+        input: [{ type: "text", text: "Second prompt", text_elements: [] }],
       },
     });
 
@@ -254,6 +354,87 @@ describe("codex-process", () => {
             text_elements: [],
           },
         ],
+      },
+    });
+
+    session.stop();
+  });
+
+  it("clears plan-review waiting state on interrupt so a new plan prompt can start", async () => {
+    const factory = createCodexSessionFactory();
+    const startPromise = factory.startSession({
+      projectPath: "/tmp/project-plan-interrupt",
+      unrestricted: true,
+      permissionMode: "plan",
+      model: "gpt-5.4",
+      modelReasoningEffort: "xhigh",
+    });
+    const child = fakeChildren[0];
+
+    await bootstrapSession(child, "thr_plan_interrupt");
+    const session = await startPromise;
+    const messages: Array<Record<string, unknown>> = [];
+    session.onMessage((message) => {
+      messages.push(message);
+    });
+
+    session.sendInput("Plan the work");
+    await tick();
+    const firstTurnReq = nextOutgoingRequest(child);
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({ id: firstTurnReq.id, result: { turn: { id: "turn_plan_interrupt" } } })}\n`,
+    );
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({ method: "turn/started", params: { turn: { id: "turn_plan_interrupt" } } })}\n`,
+    );
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        method: "item/completed",
+        params: {
+          item: {
+            id: "msg_plan_interrupt",
+            type: "agent_message",
+            text: "1. Inspect\n2. Edit",
+            phase: "final_answer",
+          },
+        },
+      })}\n`,
+    );
+    child.stdout.emit(
+      "data",
+      `${JSON.stringify({
+        method: "turn/completed",
+        params: { turn: { id: "turn_plan_interrupt", status: "completed" } },
+      })}\n`,
+    );
+    await tick();
+
+    expect(messages).toContainEqual({
+      type: "permission_request",
+      toolUseId: expect.stringMatching(/^plan_/),
+      toolName: "ExitPlanMode",
+      input: { plan: "1. Inspect\n2. Edit" },
+    });
+
+    session.interrupt();
+    await tick();
+
+    session.sendInput("Revise the plan");
+    await tick();
+
+    expect(nextOutgoingRequest(child)).toMatchObject({
+      method: "turn/start",
+      params: {
+        threadId: "thr_plan_interrupt",
+        effort: "xhigh",
+        collaborationMode: {
+          mode: "plan",
+          settings: expect.objectContaining({ model: "gpt-5.4" }),
+        },
+        input: [{ type: "text", text: "Revise the plan", text_elements: [] }],
       },
     });
 
