@@ -47,6 +47,14 @@ describe("renderViewerHtml", () => {
     expect(composer.compareDocumentPosition(messages) & nodeApi.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("renders the mobile back button with an emphasized color style", () => {
+    const html = renderViewerHtml();
+
+    expect(html).toContain('id="viewerBackBtn" class="secondary back-to-list mobile-only"');
+    expect(html).toContain(".back-to-list {");
+    expect(html).toContain("background: linear-gradient(135deg, #d97706, #b45309);");
+  });
+
   it("starts sessions with the configured model, effort, and plan mode from the composer controls", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
@@ -129,6 +137,25 @@ describe("renderViewerHtml", () => {
       { value: "", label: "Select a repository" },
       { value: "/workspace/alpha", label: "alpha" },
       { value: "/workspace/beta", label: "beta" },
+    ]);
+  });
+
+  it("prefers selectable project path choices from the bridge for the dropdown", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      projectPaths: ["/workspace/main-repo", "/workspace/feature-worktree-repo"],
+      selectableProjectPaths: ["/workspace/main-repo"],
+      sessions: [],
+    });
+
+    expect(viewer.input("projectPath").value).toBe("/workspace/main-repo");
+    expect(viewer.projectPathChoices()).toEqual([
+      { value: "", label: "Select a repository" },
+      { value: "/workspace/main-repo", label: "main-repo" },
     ]);
   });
 
@@ -864,38 +891,6 @@ describe("renderViewerHtml", () => {
     expect(viewer.sessionSpinners()).toEqual([]);
   });
 
-  it("shows queued prompt counts even when this browser does not know the queued text", () => {
-    const viewer = bootViewer();
-    const socket = viewer.socketAt(0);
-
-    socket.open();
-    socket.receive({
-      type: "session_list",
-      sessions: [
-        {
-          sessionId: "sess_a",
-          title: "Running session",
-          projectPath: "/workspace/a",
-          status: "running",
-          answerState: "commentary",
-          updatedAt: "2026-03-15T00:00:05.000Z",
-          model: "gpt-5.4",
-          modelReasoningEffort: "xhigh",
-          permissionMode: "default",
-          pinned: false,
-          completed: false,
-          preview: "Thinking...",
-          queueLength: 2,
-        },
-      ],
-    });
-    viewer.sessionButtons()[0]?.click();
-    socket.receive({ type: "history", sessionId: "sess_a", messages: [] });
-
-    expect(viewer.panel("queuedPanel").hidden).toBe(false);
-    expect(viewer.queuedItems()).toEqual(["2 queued prompts"]);
-  });
-
   it("shows newest messages first and collapses intermediate turn messages after the final answer", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
@@ -1193,8 +1188,6 @@ describe("renderViewerHtml", () => {
     viewer.sessionButtons()[0]?.click();
     socket.receive({ type: "history", sessionId: "sess_a", messages: [] });
 
-    expect(viewer.panel("queuedPanel").hidden).toBe(true);
-
     viewer.textarea("composerInput").value = "Queued follow-up";
     viewer.button("sendBtn").click();
 
@@ -1211,8 +1204,6 @@ describe("renderViewerHtml", () => {
       text: "Queued follow-up",
     });
 
-    expect(viewer.queuedItems()).toEqual(["Queued follow-up"]);
-    expect(viewer.panel("queuedPanel").hidden).toBe(false);
     expect(viewer.messageBlocks().map((block: HTMLElement) => block.textContent?.trim())).toEqual([]);
 
     socket.receive({
@@ -1222,9 +1213,51 @@ describe("renderViewerHtml", () => {
       timestamp: "2026-03-15T00:00:07.000Z",
     });
 
-    expect(viewer.queuedItems()).toEqual([]);
-    expect(viewer.panel("queuedPanel").hidden).toBe(true);
     expect(viewer.messageBlocks()[0]?.textContent).toContain("Queued follow-up");
+  });
+
+  it("preserves live messages when a stale history snapshot arrives afterward", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Session A",
+          projectPath: "/workspace/a",
+          status: "idle",
+          answerState: "commentary",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "gpt-5.4",
+          modelReasoningEffort: "xhigh",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+      ],
+    });
+    viewer.sessionButtons()[0]?.click();
+
+    socket.receive({
+      type: "user",
+      sessionId: "sess_a",
+      text: "First prompt",
+      timestamp: "2026-03-15T00:00:06.000Z",
+    });
+
+    socket.receive({
+      type: "history",
+      sessionId: "sess_a",
+      messages: [],
+    });
+
+    expect(viewer.messageBlocks()).toHaveLength(1);
+    expect(viewer.messageBlocks()[0]?.textContent).toContain("First prompt");
   });
 
   it("sends force input payloads when the force-send option is enabled", () => {
@@ -1431,10 +1464,6 @@ function bootViewer(options: { savedStorage?: Record<string, string>; url?: stri
     },
     messageBlocks(): HTMLElement[] {
       return Array.from(dom.window.document.getElementById("messages")?.children ?? []) as HTMLElement[];
-    },
-    queuedItems(): string[] {
-      return Array.from(dom.window.document.querySelectorAll("#queuedList li"))
-        .map((item) => (item as HTMLElement).textContent?.trim() ?? "");
     },
     projectPathChoices(): Array<{ value: string; label: string }> {
       return Array.from(dom.window.document.querySelectorAll("#projectPathPicker option"))

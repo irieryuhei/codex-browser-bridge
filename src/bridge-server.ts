@@ -308,9 +308,30 @@ export async function startBridgeServer(
     ...(session.pendingPermission ? { pendingPermission: session.pendingPermission } : {}),
   });
 
+  const buildSelectableProjectPaths = (): string[] => {
+    const sessionProjectPaths = Array.from(sessions.values())
+      .sort(compareSessionsForList)
+      .slice(0, 10)
+      .map((session) => session.projectPath);
+    const unique: string[] = [];
+    const seen = new Set<string>();
+
+    [...sessionProjectPaths, ...recentProjectPaths].forEach((projectPath) => {
+      const normalized = projectPath.trim();
+      if (!normalized || seen.has(normalized) || shouldHideProjectPath(normalized)) {
+        return;
+      }
+      seen.add(normalized);
+      unique.push(normalized);
+    });
+
+    return unique;
+  };
+
   const buildSessionListPayload = (): Record<string, unknown> => ({
     type: "session_list",
     projectPaths: [...recentProjectPaths],
+    selectableProjectPaths: buildSelectableProjectPaths(),
     sessions: Array.from(sessions.values()).sort(compareSessionsForList).map(buildSessionSummary),
   });
 
@@ -1182,6 +1203,10 @@ function compareSessionsForList(left: SessionRecord, right: SessionRecord): numb
     return left.pinned ? -1 : 1;
   }
   return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+}
+
+function shouldHideProjectPath(projectPath: string): boolean {
+  return projectPath.toLowerCase().includes("worktree");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

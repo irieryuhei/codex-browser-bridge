@@ -270,6 +270,22 @@ export function renderViewerHtml(): string {
       border: 1px solid var(--line);
     }
 
+    .back-to-list {
+      background: linear-gradient(135deg, #d97706, #b45309);
+      color: #fff;
+      border: 1px solid rgba(124, 45, 18, 0.18);
+      box-shadow: 0 10px 22px rgba(180, 83, 9, 0.22);
+    }
+
+    .back-to-list:hover {
+      box-shadow: 0 14px 28px rgba(180, 83, 9, 0.28);
+    }
+
+    .back-to-list:focus-visible {
+      outline: 3px solid rgba(217, 119, 6, 0.24);
+      outline-offset: 2px;
+    }
+
     .statusbar {
       display: flex;
       gap: 12px;
@@ -804,7 +820,7 @@ export function renderViewerHtml(): string {
           </div>
 
           <div class="button-row">
-            <button id="viewerBackBtn" class="secondary mobile-only" type="button" hidden>Back to List</button>
+            <button id="viewerBackBtn" class="secondary back-to-list mobile-only" type="button" hidden>Back to List</button>
             <button id="viewerPinBtn" class="secondary" type="button" disabled>Pin</button>
             <button id="viewerCompleteBtn" class="secondary" type="button" disabled>Complete</button>
           </div>
@@ -829,11 +845,6 @@ export function renderViewerHtml(): string {
         </div>
 
         <section id="permissionPanel" class="permission-panel" hidden></section>
-
-        <section id="queuedPanel" class="queued-panel" hidden>
-          <h3>Queued Prompts</h3>
-          <ul id="queuedList" class="queued-list"></ul>
-        </section>
 
         <div id="messages" class="messages"></div>
       </section>
@@ -875,8 +886,6 @@ export function renderViewerHtml(): string {
     const listPanel = document.getElementById("listPanel");
     const listResizeHandle = document.getElementById("listResizeHandle");
     const permissionPanel = document.getElementById("permissionPanel");
-    const queuedPanel = document.getElementById("queuedPanel");
-    const queuedList = document.getElementById("queuedList");
     const messages = document.getElementById("messages");
     const composerInput = document.getElementById("composerInput");
     const sendBtn = document.getElementById("sendBtn");
@@ -1288,7 +1297,9 @@ export function renderViewerHtml(): string {
 
       if (message.type === "session_list") {
         state.sessions = Array.isArray(message.sessions) ? message.sessions : [];
-        state.sharedProjectPaths = normalizeProjectPaths(message.projectPaths);
+        state.sharedProjectPaths = normalizeProjectPaths(
+          Array.isArray(message.selectableProjectPaths) ? message.selectableProjectPaths : message.projectPaths,
+        );
         pruneUnreadSessions();
         renderProjectPathOptions();
         renderSessionRepoOptions();
@@ -1318,7 +1329,10 @@ export function renderViewerHtml(): string {
       }
 
       if (message.type === "history" && typeof message.sessionId === "string") {
-        state.histories.set(message.sessionId, Array.isArray(message.messages) ? message.messages : []);
+        state.histories.set(
+          message.sessionId,
+          mergeHistorySnapshot(message.sessionId, Array.isArray(message.messages) ? message.messages : []),
+        );
         reconcileQueuedDrafts(message.sessionId);
         if (message.sessionId === state.selectedSessionId) {
           clearSessionUnread(message.sessionId);
@@ -1379,6 +1393,54 @@ export function renderViewerHtml(): string {
       const history = state.histories.get(sessionId) || [];
       history.push(message);
       state.histories.set(sessionId, history);
+    }
+
+    function mergeHistorySnapshot(sessionId, incomingMessages) {
+      const existingMessages = state.histories.get(sessionId) || [];
+      if (existingMessages.length === 0) {
+        return incomingMessages.slice();
+      }
+      if (incomingMessages.length === 0) {
+        return existingMessages.slice();
+      }
+
+      const merged = incomingMessages.slice();
+      const seen = new Set(merged.map(historyMessageKey));
+      existingMessages.forEach((message) => {
+        const key = historyMessageKey(message);
+        if (seen.has(key)) {
+          return;
+        }
+        seen.add(key);
+        merged.push(message);
+      });
+      return merged;
+    }
+
+    function historyMessageKey(message) {
+      if (!message || typeof message !== "object") {
+        return JSON.stringify(message);
+      }
+
+      if (message.type === "assistant") {
+        const assistantMessage = message.message && typeof message.message === "object"
+          ? message.message
+          : {};
+        return JSON.stringify({
+          type: message.type,
+          timestamp: message.timestamp || "",
+          phase: assistantMessage.phase || "",
+          content: Array.isArray(assistantMessage.content) ? assistantMessage.content : [],
+        });
+      }
+
+      return JSON.stringify({
+        type: message.type,
+        timestamp: message.timestamp || "",
+        id: message.id || "",
+        text: message.text || "",
+        message: message.message || "",
+      });
     }
 
     function patchSession(sessionId, patch) {
@@ -1832,32 +1894,7 @@ export function renderViewerHtml(): string {
     }
 
     function renderQueuedDrafts() {
-      const session = currentSession();
-      const queued = session ? (state.queuedDrafts.get(session.sessionId) || []) : [];
-      const queueLength = session
-        ? Math.max(Number(session.queueLength) || 0, queued.length)
-        : 0;
-      queuedList.replaceChildren();
-      if (!session || queueLength === 0) {
-        queuedPanel.hidden = true;
-        return;
-      }
-      queuedPanel.hidden = false;
-      queued.forEach((text) => {
-        const item = document.createElement("li");
-        item.textContent = text;
-        queuedList.appendChild(item);
-      });
-      const hiddenCount = Math.max(0, queueLength - queued.length);
-      if (hiddenCount > 0) {
-        const item = document.createElement("li");
-        item.textContent = formatQueuedPromptCount(hiddenCount, queued.length > 0);
-        queuedList.appendChild(item);
-      }
-    }
-
-    function formatQueuedPromptCount(count, more) {
-      return count + " " + (more ? "more " : "") + (count === 1 ? "queued prompt" : "queued prompts");
+      return;
     }
 
     function updateComposerState() {

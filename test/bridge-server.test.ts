@@ -89,7 +89,6 @@ describe("startBridgeServer", () => {
     expect(html).toContain('id="permissionMode"');
     expect(html).toContain('id="modelInput"');
     expect(html).toContain('id="modelReasoningEffort"');
-    expect(html).toContain('id="queuedList"');
     expect(html).toContain('id="viewerPinBtn"');
     expect(html).toContain('id="viewerCompleteBtn"');
     expect(html).toContain('id="permissionPanel"');
@@ -251,6 +250,57 @@ describe("startBridgeServer", () => {
           }),
         ],
       });
+
+      ws.close();
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes project path dropdown candidates when the path contains worktree", async () => {
+    const tempRoot = await mkdtemp(join(tmpdir(), "codex-browser-bridge-path-filter-"));
+    const mainRepoPath = join(tempRoot, "main-repo");
+    const worktreePath = join(tempRoot, "feature-worktree-repo");
+
+    try {
+      const sessions = [
+        new FakeCodexSession("thread_main_repo"),
+        new FakeCodexSession("thread_worktree"),
+      ];
+      const factory: CodexSessionFactory = {
+        startSession: async () => {
+          const next = sessions.shift();
+          if (!next) {
+            throw new Error("missing fake session");
+          }
+          return next;
+        },
+      };
+
+      const server = await startBridgeServer({
+        port: 0,
+        codexSessionRoot: null,
+        codexFactory: factory,
+      });
+      servers.push(server);
+
+      const ws = new WebSocket(`ws://127.0.0.1:${server.port}`);
+      await once(ws, "open");
+
+      ws.send(JSON.stringify({ type: "start", projectPath: mainRepoPath }));
+      await waitForMessage(ws, (msg) => msg.type === "system" && msg.subtype === "session_created");
+
+      ws.send(JSON.stringify({ type: "start", projectPath: worktreePath }));
+      await waitForMessage(ws, (msg) => msg.type === "system" && msg.subtype === "session_created" && msg.projectPath === worktreePath);
+
+      ws.send(JSON.stringify({ type: "list_sessions" }));
+      const listed = await waitForMessage(ws, (msg) => {
+        return msg.type === "session_list" && Array.isArray(msg.selectableProjectPaths);
+      });
+
+      expect(listed.selectableProjectPaths).toEqual([mainRepoPath]);
+      expect(listed.projectPaths).toContain(mainRepoPath);
+      expect(listed.projectPaths).toContain(worktreePath);
 
       ws.close();
     } finally {
