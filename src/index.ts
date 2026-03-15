@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { startBridgeServer } from "./bridge-server.js";
 import { createCodexSessionFactory } from "./codex-process.js";
 
@@ -9,6 +10,7 @@ async function main(): Promise<void> {
     port,
     host,
     codexFactory: createCodexSessionFactory(),
+    stateFilePath: process.env.BRIDGE_STATE_PATH ?? join(process.cwd(), ".codex-browser-bridge", "sessions.json"),
   });
 
   console.log(`[bridge] Listening on http://${host}:${server.port}`);

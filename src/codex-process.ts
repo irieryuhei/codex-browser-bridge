@@ -1,5 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { CodexSession, CodexSessionFactory } from "./bridge-server.js";
+import type {
+  CodexSession,
+  CodexSessionFactory,
+  PermissionMode,
+} from "./bridge-server.js";
 
 export interface CodexSpawnCommand {
   command: string;
@@ -7,22 +12,25 @@ export interface CodexSpawnCommand {
 }
 
 interface JsonRpcRequest {
-  id: number;
-  method: string;
+  id?: number | string;
+  method?: string;
   params?: Record<string, unknown>;
-}
-
-interface JsonRpcResponse {
-  id: number;
   result?: unknown;
   error?: {
     message?: string;
   };
 }
 
-interface JsonRpcNotification {
-  method: string;
-  params?: Record<string, unknown>;
+interface PendingApproval {
+  requestId: number | string;
+  toolUseId: string;
+  toolName: string;
+}
+
+interface PendingUserInput {
+  requestId: number | string;
+  toolUseId: string;
+  questions: Array<{ id: string }>;
 }
 
 export function getCodexSpawnCommand(unrestricted = true): CodexSpawnCommand {
@@ -64,11 +72,18 @@ class AppServerCodexSession implements CodexSession {
     }
   >();
   private readonly pendingInputs: string[] = [];
+  private readonly pendingApprovals = new Map<string, PendingApproval>();
+  private readonly pendingUserInputs = new Map<string, PendingUserInput>();
   private messageListener: (message: Record<string, unknown>) => void = () => {};
   private threadId: string | null = null;
   private activeTurnId: string | null = null;
   private turnInFlight = false;
   private stopped = false;
+  private startModel = "";
+  private startModelReasoningEffort = "";
+  private collaborationMode: PermissionMode = "default";
+  private lastPlanText = "";
+  private pendingPlanApproval: { toolUseId: string; plan: string } | null = null;
 
   private constructor(
     child: ChildProcessWithoutNullStreams,
@@ -80,7 +95,7 @@ class AppServerCodexSession implements CodexSession {
     });
     this.child.stderr.setEncoding("utf8");
     this.child.stderr.on("data", () => {
-      // Stderr is intentionally ignored in the minimal MVP implementation.
+      // Stderr is intentionally ignored in this bridge.
     });
     this.child.on("exit", () => {
       this.rejectAllPending(new Error("codex app-server exited"));
@@ -92,6 +107,9 @@ class AppServerCodexSession implements CodexSession {
   static async start(options: {
     projectPath: string;
     unrestricted: boolean;
+    model?: string;
+    modelReasoningEffort?: string;
+    permissionMode?: PermissionMode;
   }): Promise<AppServerCodexSession> {
     const spawnCommand = getCodexSpawnCommand(options.unrestricted);
     const child = spawn(spawnCommand.command, spawnCommand.args, {
@@ -101,6 +119,9 @@ class AppServerCodexSession implements CodexSession {
     });
 
     const session = new AppServerCodexSession(child);
+    session.startModel = options.model?.trim() ?? "";
+    session.startModelReasoningEffort = normalizeModelReasoningEffort(options.modelReasoningEffort);
+    session.collaborationMode = options.permissionMode ?? "default";
     await session.bootstrap(options.projectPath);
     return session;
   }
@@ -123,8 +144,101 @@ class AppServerCodexSession implements CodexSession {
       threadId: this.threadId,
       turnId: this.activeTurnId,
     }).catch(() => {
-      // Ignore interrupt failures in the MVP implementation.
+      // Ignore interrupt failures in the browser bridge.
     });
+  }
+
+  approve(toolUseId?: string, updatedInput?: Record<string, unknown>): void {
+    if (this.pendingPlanApproval && (!toolUseId || toolUseId === this.pendingPlanApproval.toolUseId)) {
+      const plan = typeof updatedInput?.plan === "string" && updatedInput.plan.trim()
+        ? updatedInput.plan.trim()
+        : this.pendingPlanApproval.plan;
+      const resolvedToolUseId = this.pendingPlanApproval.toolUseId;
+      this.pendingPlanApproval = null;
+      this.collaborationMode = "default";
+      this.emitMessage({
+        type: "tool_result",
+        toolUseId: resolvedToolUseId,
+        toolName: "ExitPlanMode",
+        content: "Plan approved",
+      });
+      this.pendingInputs.unshift(`Execute the following plan:\n\n${plan}`);
+      this.emitMessage({ type: "status", status: "running" });
+      void this.flushInputQueue();
+      return;
+    }
+
+    const pending = this.resolvePendingApproval(toolUseId);
+    if (!pending) {
+      return;
+    }
+
+    this.pendingApprovals.delete(pending.toolUseId);
+    this.respondToServerRequest(pending.requestId, { decision: "accept" });
+    this.emitMessage({
+      type: "tool_result",
+      toolUseId: pending.toolUseId,
+      toolName: pending.toolName,
+      content: "Approved",
+    });
+    this.emitMessage({ type: "status", status: "running" });
+  }
+
+  reject(toolUseId?: string, message?: string): void {
+    if (this.pendingPlanApproval && (!toolUseId || toolUseId === this.pendingPlanApproval.toolUseId)) {
+      const resolvedToolUseId = this.pendingPlanApproval.toolUseId;
+      this.pendingPlanApproval = null;
+      this.emitMessage({
+        type: "tool_result",
+        toolUseId: resolvedToolUseId,
+        toolName: "ExitPlanMode",
+        content: "Plan rejected",
+      });
+      if (message?.trim()) {
+        this.pendingInputs.unshift(message.trim());
+        void this.flushInputQueue();
+        return;
+      }
+      this.emitMessage({ type: "status", status: "idle" });
+      return;
+    }
+
+    const pending = this.resolvePendingApproval(toolUseId);
+    if (!pending) {
+      return;
+    }
+
+    this.pendingApprovals.delete(pending.toolUseId);
+    this.respondToServerRequest(pending.requestId, { decision: "decline" });
+    this.emitMessage({
+      type: "tool_result",
+      toolUseId: pending.toolUseId,
+      toolName: pending.toolName,
+      content: "Rejected",
+    });
+    this.emitMessage({ type: "status", status: "running" });
+  }
+
+  answer(toolUseId: string, result: string): void {
+    const pending = this.pendingUserInputs.get(toolUseId);
+    if (!pending) {
+      return;
+    }
+
+    this.pendingUserInputs.delete(toolUseId);
+    this.respondToServerRequest(pending.requestId, {
+      answers: pending.questions.map((question) => ({
+        question_id: question.id,
+        answer: result,
+      })),
+    });
+    this.emitMessage({
+      type: "tool_result",
+      toolUseId: pending.toolUseId,
+      toolName: "AskUserQuestion",
+      content: "Answered",
+    });
+    this.emitMessage({ type: "status", status: "running" });
   }
 
   stop(): void {
@@ -165,22 +279,46 @@ class AppServerCodexSession implements CodexSession {
   }
 
   private async flushInputQueue(): Promise<void> {
-    if (this.turnInFlight || !this.threadId || this.pendingInputs.length === 0) {
+    if (
+      this.turnInFlight
+      || !this.threadId
+      || this.pendingInputs.length === 0
+      || this.pendingApprovals.size > 0
+      || this.pendingUserInputs.size > 0
+      || this.pendingPlanApproval
+    ) {
       return;
     }
 
     const text = this.pendingInputs.shift();
-    if (!text) {
+    if (!text?.trim()) {
       return;
     }
 
     this.turnInFlight = true;
+    this.emitMessage({ type: "status", status: "running" });
+
     try {
-      const turnStart = await this.request("turn/start", {
+      const params: Record<string, unknown> = {
         threadId: this.threadId,
         input: [{ type: "text", text, text_elements: [] }],
-      }) as { turn?: { id?: string } };
+        approvalPolicy: "never",
+        collaborationMode: {
+          mode: this.collaborationMode,
+          settings: {
+            model: this.startModel || "gpt-5.4",
+          },
+        },
+      };
 
+      if (this.startModel) {
+        params.model = this.startModel;
+      }
+      if (this.startModelReasoningEffort) {
+        params.effort = this.startModelReasoningEffort;
+      }
+
+      const turnStart = await this.request("turn/start", params) as { turn?: { id?: string } };
       const turnId = turnStart.turn?.id;
       if (turnId) {
         this.activeTurnId = turnId;
@@ -192,6 +330,7 @@ class AppServerCodexSession implements CodexSession {
         type: "error",
         message: error instanceof Error ? error.message : String(error),
       });
+      this.emitMessage({ type: "status", status: "idle" });
       void this.flushInputQueue();
     }
   }
@@ -211,18 +350,25 @@ class AppServerCodexSession implements CodexSession {
         continue;
       }
 
-      const payload = JSON.parse(line) as JsonRpcResponse | JsonRpcNotification;
-      if ("id" in payload && payload.id !== undefined) {
+      const payload = JSON.parse(line) as JsonRpcRequest;
+      if (payload.id !== undefined && payload.method && payload.result === undefined && !payload.error) {
+        this.handleServerRequest(payload.id, payload.method, payload.params ?? {});
+        continue;
+      }
+      if (payload.id !== undefined && (payload.result !== undefined || payload.error)) {
         this.handleResponse(payload);
         continue;
       }
-      if ("method" in payload) {
-        this.handleNotification(payload);
+      if (payload.method) {
+        this.handleNotification(payload.method, payload.params ?? {});
       }
     }
   }
 
-  private handleResponse(response: JsonRpcResponse): void {
+  private handleResponse(response: JsonRpcRequest): void {
+    if (typeof response.id !== "number") {
+      return;
+    }
     const pending = this.pendingRequests.get(response.id);
     if (!pending) {
       return;
@@ -237,16 +383,74 @@ class AppServerCodexSession implements CodexSession {
     pending.resolve(response.result);
   }
 
-  private handleNotification(notification: JsonRpcNotification): void {
-    const params = notification.params ?? {};
+  private handleServerRequest(
+    requestId: number | string,
+    method: string,
+    params: Record<string, unknown>,
+  ): void {
+    if (method === "item/tool/requestUserInput") {
+      const toolUseId = typeof params.itemId === "string" ? params.itemId : `ask_${randomUUID()}`;
+      const questions = Array.isArray(params.questions)
+        ? params.questions.flatMap((question) => {
+          if (
+            !isRecord(question)
+            || typeof question.id !== "string"
+            || typeof question.question !== "string"
+          ) {
+            return [];
+          }
+          return [{
+            id: question.id,
+            question: question.question,
+            ...(typeof question.header === "string" ? { header: question.header } : {}),
+            ...(Array.isArray(question.options) ? { options: question.options } : {}),
+          }];
+        })
+        : [];
 
-    switch (notification.method) {
+      this.pendingUserInputs.set(toolUseId, {
+        requestId,
+        toolUseId,
+        questions: questions.map((question) => ({ id: question.id })),
+      });
+      this.emitMessage({
+        type: "permission_request",
+        toolUseId,
+        toolName: "AskUserQuestion",
+        input: { questions },
+      });
+      this.emitMessage({ type: "status", status: "waiting_approval" });
+      return;
+    }
+
+    if (method === "item/commandExecution/requestApproval" || method === "item/fileChange/requestApproval") {
+      const toolUseId = typeof params.itemId === "string" ? params.itemId : `approval_${randomUUID()}`;
+      const toolName = method === "item/fileChange/requestApproval" ? "FileChange" : "Bash";
+      this.pendingApprovals.set(toolUseId, {
+        requestId,
+        toolUseId,
+        toolName,
+      });
+      this.emitMessage({
+        type: "permission_request",
+        toolUseId,
+        toolName,
+        input: { ...params },
+      });
+      this.emitMessage({ type: "status", status: "waiting_approval" });
+      return;
+    }
+
+    this.respondToServerRequest(requestId, {});
+  }
+
+  private handleNotification(method: string, params: Record<string, unknown>): void {
+    switch (method) {
       case "turn/started": {
         const turn = params.turn as { id?: string } | undefined;
         if (turn?.id) {
           this.activeTurnId = turn.id;
         }
-        this.emitMessage({ type: "status", status: "running" });
         break;
       }
 
@@ -295,6 +499,12 @@ class AppServerCodexSession implements CodexSession {
             subtype: "success",
             sessionId: this.threadId ?? undefined,
           });
+        } else if (status === "interrupted") {
+          this.emitMessage({
+            type: "result",
+            subtype: "interrupted",
+            sessionId: this.threadId ?? undefined,
+          });
         } else {
           this.emitMessage({
             type: "result",
@@ -306,6 +516,25 @@ class AppServerCodexSession implements CodexSession {
 
         this.turnInFlight = false;
         this.activeTurnId = null;
+
+        if (this.collaborationMode === "plan" && this.lastPlanText) {
+          const toolUseId = `plan_${randomUUID()}`;
+          this.pendingPlanApproval = {
+            toolUseId,
+            plan: this.lastPlanText,
+          };
+          this.lastPlanText = "";
+          this.emitMessage({
+            type: "permission_request",
+            toolUseId,
+            toolName: "ExitPlanMode",
+            input: { plan: this.pendingPlanApproval.plan },
+          });
+          this.emitMessage({ type: "status", status: "waiting_approval" });
+          return;
+        }
+
+        this.lastPlanText = "";
         this.emitMessage({ type: "status", status: "idle" });
         void this.flushInputQueue();
         break;
@@ -317,11 +546,7 @@ class AppServerCodexSession implements CodexSession {
   }
 
   private handleStartedItem(item: Record<string, unknown> | undefined): void {
-    if (!item) {
-      return;
-    }
-
-    if (normalizeItemType(item.type) !== "commandexecution") {
+    if (!item || normalizeItemType(item.type) !== "commandexecution") {
       return;
     }
 
@@ -345,7 +570,7 @@ class AppServerCodexSession implements CodexSession {
             input: { command },
           },
         ],
-        model: "codex",
+        model: this.startModel || "codex",
       },
     });
   }
@@ -388,22 +613,33 @@ class AppServerCodexSession implements CodexSession {
       ? item.phase
       : undefined;
 
+    if (this.collaborationMode === "plan" && phase === "final_answer") {
+      this.lastPlanText = text;
+    }
+
     this.emitMessage({
       type: "assistant",
       message: {
         id,
         role: "assistant",
         content: [{ type: "text", text }],
-        model: "codex",
+        model: this.startModel || "codex",
         ...(phase ? { phase } : {}),
       },
     });
   }
 
+  private resolvePendingApproval(toolUseId?: string): PendingApproval | undefined {
+    if (toolUseId) {
+      return this.pendingApprovals.get(toolUseId);
+    }
+    const first = this.pendingApprovals.values().next();
+    return first.done ? undefined : first.value;
+  }
+
   private request(method: string, params: Record<string, unknown>): Promise<unknown> {
     const id = this.nextRequestId++;
-    const payload: JsonRpcRequest = { id, method, params };
-    this.child.stdin.write(`${JSON.stringify(payload)}\n`);
+    this.child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
 
     return new Promise((resolve, reject) => {
       this.pendingRequests.set(id, { resolve, reject });
@@ -412,6 +648,10 @@ class AppServerCodexSession implements CodexSession {
 
   private notify(method: string, params: Record<string, unknown>): void {
     this.child.stdin.write(`${JSON.stringify({ method, params })}\n`);
+  }
+
+  private respondToServerRequest(id: number | string, result: Record<string, unknown>): void {
+    this.child.stdin.write(`${JSON.stringify({ id, result })}\n`);
   }
 
   private emitMessage(message: Record<string, unknown>): void {
@@ -426,6 +666,21 @@ class AppServerCodexSession implements CodexSession {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function normalizeItemType(value: unknown): string {
   return typeof value === "string" ? value.toLowerCase().replace(/[^a-z]/g, "") : "";
+}
+
+function normalizeModelReasoningEffort(value: unknown): string {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalized === "minimal"
+    || normalized === "low"
+    || normalized === "medium"
+    || normalized === "high"
+    || normalized === "xhigh"
+    ? normalized
+    : "";
 }

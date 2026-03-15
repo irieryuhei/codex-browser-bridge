@@ -1,0 +1,109 @@
+{
+  "sessions": [
+    {
+      "sessionId": "2dc381cf",
+      "projectPath": "/Users/irieryuuhei/Documents/qst-ProcessImprovement/mserver-genflow",
+      "title": "Hello",
+      "status": "running",
+      "createdAt": "2026-03-15T12:41:00.885Z",
+      "updatedAt": "2026-03-15T12:41:16.107Z",
+      "model": "gpt-5.4",
+      "modelReasoningEffort": "xhigh",
+      "permissionMode": "default",
+      "pinned": false,
+      "completed": false,
+      "history": [
+        {
+          "type": "user",
+          "sessionId": "2dc381cf",
+          "text": "Hello",
+          "timestamp": "2026-03-15T12:41:13.467Z"
+        },
+        {
+          "type": "stream_delta",
+          "sessionId": "2dc381cf",
+          "timestamp": "2026-03-15T12:41:16.088Z",
+          "text": "Hello",
+          "id": "msg_058cd0e634cae7f60169b6a8ebfae881919450a6a87a9d2ee9"
+        },
+        {
+          "type": "stream_delta",
+          "sessionId": "2dc381cf",
+          "timestamp": "2026-03-15T12:41:16.090Z",
+          "text": ".",
+          "id": "msg_058cd0e634cae7f60169b6a8ebfae881919450a6a87a9d2ee9"
+        },
+        {
+          "type": "stream_delta",
+          "sessionId": "2dc381cf",
+          "timestamp": "2026-03-15T12:41:16.090Z",
+          "text": " What",
+          "id": "msg_058cd0e634cae7f60169b6a8ebfae881919450a6a87a9d2ee9"
+        },
+        {
+          "type": "stream_delta",
+          "sessionId": "2dc381cf",
+          "timestamp": "2026-03-15T12:41:16.091Z",
+          "text": " do",
+          "id": "msg_058cd0e634cae7f60169b6a8ebfae881919450a6a87a9d2ee9"
+        },
+        {
+          "type": "stream_delta",
+          "sessionId": "2dc381cf",
+          "timestamp": "2026-03-15T12:41:16.091Z",
+          "text": " you",
+          "id": "msg_058cd0e634cae7f60169b6a8ebfae881919450a6a87a9d2ee9"
+        },
+        {
+          "type": "stream_delta",
+          "sessionId": "2dc381cf",
+          "timestamp": "2026-03-15T12:41:16.091Z",
+          "text": " need",
+          "id": "msg_058cd0e634cae7f60169b6a8ebfae881919450a6a87a9d2ee9"
+        },
+        {
+          "type": "stream_delta",
+          "sessionId": "2dc381cf",
+          "timestamp": "2026-03-15T12:41:16.091Z",
+          "text": " help",
+          "id": "msg_058cd0e634cae7f60169b6a8ebfae881919450a6a87a9d2ee9"
+        },
+        {
+          "type": "stream_delta",
+          "sessionId": "2dc381cf",
+          "timestamp": "2026-03-15T12:41:16.091Z",
+          "text": " with",
+          "id": "msg_058cd0e634cae7f60169b6a8ebfae881919450a6a87a9d2ee9"
+        },
+        {
+          "type": "stream_delta",
+          "sessionId": "2dc381cf",
+          "timestamp": "2026-03-15T12:41:16.092Z",
+          "text": "?",
+          "id": "msg_058cd0e634cae7f60169b6a8ebfae881919450a6a87a9d2ee9"
+        },
+        {
+          "type": "assistant",
+          "sessionId": "2dc381cf",
+          "timestamp": "2026-03-15T12:41:16.107Z",
+          "message": {
+            "id": "msg_058cd0e634cae7f60169b6a8ebfae881919450a6a87a9d2ee9",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello. What do you need help with?"
+              }
+            ],
+            "model": "gpt-5.4",
+            "phase": "final_answer"
+          }
+        }
+      ],
+      "pendingPermission": null
+    }
+  ],
+  "recentProjectPaths": [
+    "/Users/irieryuuhei/Documents/qst-ProcessImprovement/mserver-genflow"
+  ]
+}

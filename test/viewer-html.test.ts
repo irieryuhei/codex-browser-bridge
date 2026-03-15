@@ -1,225 +1,424 @@
-import vm from "node:vm";
-import { describe, expect, it } from "vitest";
+import { JSDOM } from "jsdom";
+import { afterEach, describe, expect, it } from "vitest";
 import { renderViewerHtml } from "../src/viewer-html.js";
 
+const doms: JSDOM[] = [];
+
 describe("renderViewerHtml", () => {
-  it("uses the current origin websocket url by default", () => {
-    const viewer = bootViewer();
-
-    expect(viewer.element("bridgeUrl").value).toBe("ws://127.0.0.1:8765");
-    expect(viewer.socketAt(0).url).toBe("ws://127.0.0.1:8765");
+  afterEach(() => {
+    while (doms.length > 0) {
+      doms.pop()?.window.close();
+      FakeWebSocket.instances.length = 0;
+    }
   });
 
-  it("reconnects to a manually entered bridge url", () => {
+  it("connects to the current origin and asks for the session list", () => {
     const viewer = bootViewer();
-    const socket1 = viewer.socketAt(0);
+    const socket = viewer.socketAt(0);
 
-    viewer.element("bridgeUrl").value = "ws://bridge.internal:9000";
-    viewer.element("connectBtn").dispatch("click");
+    expect(viewer.panel("bridgeControls").hidden).toBe(false);
+    expect(viewer.input("projectPath").value).toBe("/workspace/mserver");
+    expect(viewer.input("modelInput").value).toBe("gpt-5.4");
+    expect(viewer.select("modelReasoningEffort").value).toBe("xhigh");
 
-    const socket2 = viewer.socketAt(1);
+    socket.open();
 
-    expect(socket1.readyState).toBe(3);
-    expect(socket2.url).toBe("ws://bridge.internal:9000");
+    expect(viewer.input("bridgeUrl").value).toBe("ws://127.0.0.1:8765");
+    expect(socket.sentJson()).toEqual([{ type: "list_sessions" }]);
+    expect(viewer.panel("bridgeControls").hidden).toBe(true);
   });
 
-  it("starts a session from the project path input", () => {
+  it("places the composer above the message list", () => {
+    const viewer = bootViewer();
+    const composer = viewer.textarea("composerInput").closest(".composer");
+    const messages = viewer.panel("messages");
+    const nodeApi = composer?.ownerDocument.defaultView?.Node;
+
+    expect(composer).not.toBeNull();
+    expect(nodeApi).toBeDefined();
+    if (!composer || !nodeApi) {
+      throw new Error("expected composer and Node API");
+    }
+    expect(composer.compareDocumentPosition(messages) & nodeApi.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("starts sessions with the configured model, effort, and plan mode from the composer controls", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
 
     socket.open();
     socket.clearSent();
-    viewer.element("projectPath").value = "/workspace/app";
+    viewer.input("projectPath").value = "/workspace/app";
+    viewer.input("modelInput").value = "gpt-5.4";
+    viewer.select("modelReasoningEffort").value = "xhigh";
+    viewer.select("permissionMode").value = "plan";
 
-    viewer.element("startBtn").dispatch("click");
+    viewer.button("startBtn").click();
 
-    expect(socket.sentJson()).toEqual([{ type: "start", projectPath: "/workspace/app" }]);
-  });
-
-  it("stores the active session when the bridge confirms session creation", () => {
-    const viewer = bootViewer();
-    const socket = viewer.socketAt(0);
-
-    socket.open();
-    socket.receive({
-      type: "system",
-      subtype: "session_created",
-      sessionId: "sess_123",
-      projectPath: "/workspace/app",
-    });
-
-    expect(viewer.element("runtimeLabel").textContent).toBe("Session sess_123 / idle");
-    expect(viewer.element("promptInput").disabled).toBe(false);
-    expect(viewer.element("sendBtn").disabled).toBe(false);
-    expect(viewer.element("interruptBtn").disabled).toBe(false);
-    expect(messageBodies(viewer)).toEqual(["Started for /workspace/app"]);
-  });
-
-  it("sends prompts to the active session and renders echoed user messages", () => {
-    const viewer = bootViewer();
-    const socket = viewer.socketAt(0);
-
-    socket.open();
-    socket.receive({
-      type: "system",
-      subtype: "session_created",
-      sessionId: "sess_123",
-      projectPath: "/workspace/app",
-    });
-    socket.clearSent();
-    viewer.element("promptInput").value = "hello codex";
-
-    viewer.element("sendBtn").dispatch("click");
-
-    expect(socket.sentJson()).toEqual([{ type: "input", text: "hello codex" }]);
-    expect(messageBodies(viewer)).toEqual(["Started for /workspace/app"]);
-
-    socket.receive({
-      type: "user",
-      text: "hello codex",
-    });
-
-    expect(messageBodies(viewer)).toEqual([
-      "Started for /workspace/app",
-      "hello codex",
+    expect(socket.sentJson()).toEqual([
+      {
+        type: "start",
+        projectPath: "/workspace/app",
+        model: "gpt-5.4",
+        modelReasoningEffort: "xhigh",
+        permissionMode: "plan",
+      },
     ]);
   });
 
-  it("updates the runtime label for status changes without adding a chat card", () => {
+  it("hydrates recent project paths from the bridge so another browser sees the same choices", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
 
     socket.open();
     socket.receive({
-      type: "system",
-      subtype: "session_created",
-      sessionId: "sess_123",
-      projectPath: "/workspace/app",
-    });
-    socket.receive({
-      type: "status",
-      status: "running",
+      type: "session_list",
+      projectPaths: ["/workspace/alpha", "/workspace/beta"],
+      sessions: [],
     });
 
-    expect(viewer.element("runtimeLabel").textContent).toBe("Session sess_123 / running");
-    expect(messageBodies(viewer)).toEqual(["Started for /workspace/app"]);
+    expect(viewer.input("projectPath").value).toBe("/workspace/alpha");
+    expect(viewer.projectPathOptions()).toEqual(["/workspace/alpha", "/workspace/beta"]);
   });
 
-  it("aggregates commentary deltas and final assistant output", () => {
+  it("renders the session list, model badge, and pin or complete actions", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
 
     socket.open();
-    socket.receive({ type: "thinking_delta", id: "reasoning_1", text: "thinking" });
-    socket.receive({ type: "thinking_delta", id: "reasoning_1", text: "..." });
-    socket.receive({ type: "stream_delta", id: "msg_1", text: "partial" });
-    socket.receive({ type: "stream_delta", id: "msg_1", text: " answer" });
     socket.receive({
-      type: "assistant",
-      message: {
-        id: "msg_1",
-        role: "assistant",
-        content: [{ type: "text", text: "final answer" }],
-        model: "codex",
-        phase: "final_answer",
-      },
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Pinned session",
+          projectPath: "/workspace/a",
+          status: "idle",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "gpt-5.4",
+          modelReasoningEffort: "xhigh",
+          permissionMode: "default",
+          pinned: true,
+          completed: false,
+          preview: "Ready",
+          queueLength: 0,
+        },
+        {
+          sessionId: "sess_b",
+          title: "Completed session",
+          projectPath: "/workspace/b",
+          status: "idle",
+          updatedAt: "2026-03-15T00:00:01.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "plan",
+          pinned: false,
+          completed: true,
+          preview: "Done",
+          queueLength: 0,
+        },
+      ],
     });
 
-    expect(messageBodies(viewer)).toEqual(["thinking...", "final answer"]);
-    expect(messageClasses(viewer)).toEqual(["message commentary", "message final"]);
+    const buttons = viewer.sessionButtons();
+    expect(buttons.map((button: HTMLButtonElement) => button.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "Pinned session repo: a model: gpt-5.4 / effort: xhigh Ready",
+      "Completed session repo: b mode: plan Done",
+    ]);
+    expect(buttons[0]?.className).toContain("pinned");
+    expect(buttons[1]?.className).toContain("completed");
+
+    socket.clearSent();
+    buttons[0]?.click();
+    expect(socket.sentJson()).toEqual([{ type: "get_history", sessionId: "sess_a" }]);
+
+    socket.receive({
+      type: "history",
+      sessionId: "sess_a",
+      messages: [],
+    });
+
+    expect(viewer.text("viewerModelBadge")).toBe("model: gpt-5.4 / effort: xhigh");
+
+    socket.clearSent();
+    viewer.button("viewerPinBtn").click();
+    viewer.button("viewerCompleteBtn").click();
+
+    expect(socket.sentJson()).toEqual([
+      { type: "set_session_pin", sessionId: "sess_a", pinned: false },
+      { type: "set_session_completion", sessionId: "sess_a", completed: true },
+    ]);
   });
 
-  it("merges tool use and tool result into one card", () => {
+  it("shows newest messages first and collapses intermediate turn messages after the final answer", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
 
     socket.open();
     socket.receive({
-      type: "assistant",
-      message: {
-        id: "tool_msg_1",
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "cmd_1",
-            name: "Bash",
-            input: { command: "ls -la" },
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Session A",
+          projectPath: "/workspace/a",
+          status: "idle",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "gpt-5.4",
+          modelReasoningEffort: "xhigh",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+      ],
+    });
+    viewer.sessionButtons()[0]?.click();
+
+    socket.receive({
+      type: "history",
+      sessionId: "sess_a",
+      messages: [
+        {
+          type: "user",
+          sessionId: "sess_a",
+          text: "Please inspect the repo",
+          timestamp: "2026-03-15T00:00:00.000Z",
+        },
+        {
+          type: "thinking_delta",
+          sessionId: "sess_a",
+          id: "reason_1",
+          text: "Inspecting...",
+          timestamp: "2026-03-15T00:00:04.000Z",
+        },
+        {
+          type: "assistant",
+          sessionId: "sess_a",
+          timestamp: "2026-03-15T00:00:06.000Z",
+          message: {
+            id: "msg_1",
+            role: "assistant",
+            model: "gpt-5.4",
+            phase: "final_answer",
+            content: [{ type: "text", text: "All good." }],
           },
-        ],
-        model: "codex",
-      },
-    });
-    socket.receive({
-      type: "tool_result",
-      toolUseId: "cmd_1",
-      toolName: "Bash",
-      content: "file-a\nfile-b",
+        },
+      ],
     });
 
-    expect(messageBodies(viewer)).toEqual(["ls -la\n\nfile-a\nfile-b"]);
-    expect(messageClasses(viewer)).toEqual(["message tool"]);
+    const cards = viewer.messageBlocks();
+    expect(cards[0]?.textContent).toContain("All good.");
+    expect(cards[1]?.tagName).toBe("DETAILS");
+    expect(cards[1]?.textContent).toContain("途中の会話");
+    expect(cards[1]?.textContent).toContain("6s");
+    expect(cards[2]?.textContent).toContain("Please inspect the repo");
   });
 
-  it("shows bridge errors in the conversation", () => {
+  it("keeps queued prompts out of history until the bridge confirms the user turn", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
 
     socket.open();
     socket.receive({
-      type: "error",
-      message: "No active session. Send 'start' first.",
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Session A",
+          projectPath: "/workspace/a",
+          status: "running",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "gpt-5.4",
+          modelReasoningEffort: "xhigh",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+      ],
+    });
+    viewer.sessionButtons()[0]?.click();
+    socket.receive({ type: "history", sessionId: "sess_a", messages: [] });
+
+    viewer.textarea("composerInput").value = "Queued follow-up";
+    viewer.button("sendBtn").click();
+
+    expect(socket.sentJson().at(-1)).toEqual({
+      type: "input",
+      sessionId: "sess_a",
+      text: "Queued follow-up",
     });
 
-    expect(messageBodies(viewer)).toEqual(["No active session. Send 'start' first."]);
-    expect(messageClasses(viewer)).toEqual(["message error"]);
+    socket.receive({
+      type: "input_ack",
+      sessionId: "sess_a",
+      queued: true,
+      text: "Queued follow-up",
+    });
+
+    expect(viewer.queuedItems()).toEqual(["Queued follow-up"]);
+    expect(viewer.messageBlocks().map((block: HTMLElement) => block.textContent?.trim())).toEqual([]);
+
+    socket.receive({
+      type: "user",
+      sessionId: "sess_a",
+      text: "Queued follow-up",
+      timestamp: "2026-03-15T00:00:07.000Z",
+    });
+
+    expect(viewer.queuedItems()).toEqual([]);
+    expect(viewer.messageBlocks()[0]?.textContent).toContain("Queued follow-up");
+  });
+
+  it("treats restored stopped sessions as read-only", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_old",
+          title: "Old session",
+          projectPath: "/workspace/old",
+          status: "stopped",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "gpt-5.4",
+          modelReasoningEffort: "xhigh",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "Stored answer",
+          queueLength: 0,
+        },
+      ],
+    });
+    viewer.sessionButtons()[0]?.click();
+    socket.receive({ type: "history", sessionId: "sess_old", messages: [] });
+
+    expect(viewer.textarea("composerInput").disabled).toBe(true);
+    expect(viewer.button("sendBtn").disabled).toBe(true);
+    expect(viewer.text("composerHint")).toContain("read-only");
+  });
+
+  it("renders plan approvals for the selected session and sends approve actions", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_plan",
+          title: "Plan session",
+          projectPath: "/workspace/a",
+          status: "waiting_approval",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "gpt-5.4",
+          modelReasoningEffort: "xhigh",
+          permissionMode: "plan",
+          pinned: false,
+          completed: false,
+          preview: "Plan ready",
+          queueLength: 0,
+          pendingPermission: {
+            toolUseId: "plan_1",
+            toolName: "ExitPlanMode",
+            input: { plan: "1. Inspect\n2. Edit\n3. Test" },
+          },
+        },
+      ],
+    });
+    viewer.sessionButtons()[0]?.click();
+    socket.receive({ type: "history", sessionId: "sess_plan", messages: [] });
+
+    expect(viewer.panel("permissionPanel").textContent).toContain("1. Inspect");
+
+    socket.clearSent();
+    viewer.button("approvePermissionBtn").click();
+
+    expect(socket.sentJson()).toEqual([
+      {
+        type: "approve",
+        sessionId: "sess_plan",
+        toolUseId: "plan_1",
+        updatedInput: { plan: "1. Inspect\n2. Edit\n3. Test" },
+      },
+    ]);
   });
 });
 
-function bootViewer() {
-  const document = new FakeDocument();
-  const webSocketClass = createFakeWebSocketClass();
-
-  const context = {
-    window: {
-      location: {
-        protocol: "http:",
-        host: "127.0.0.1:8765",
-      },
-    },
-    document,
-    WebSocket: webSocketClass,
-    console,
-  };
-
-  vm.runInNewContext(extractInlineScript(renderViewerHtml()), context);
+function bootViewer(options: { savedStorage?: Record<string, string> } = {}) {
+  const dom = new JSDOM(renderViewerHtml(), {
+    url: "http://127.0.0.1:8765/",
+    runScripts: "outside-only",
+  });
+  doms.push(dom);
+  Object.entries(options.savedStorage ?? {}).forEach(([key, value]) => {
+    dom.window.localStorage.setItem(key, value);
+  });
+  FakeWebSocket.instances.length = 0;
+  (dom.window as unknown as { WebSocket: typeof FakeWebSocket }).WebSocket = FakeWebSocket;
+  dom.window.eval(extractInlineScript(renderViewerHtml()));
 
   return {
-    element(id: string) {
-      return document.getElementById(id);
-    },
+    document: dom.window.document,
     socketAt(index: number) {
-      const socket = webSocketClass.instances[index];
+      const socket = FakeWebSocket.instances[index];
       if (!socket) {
         throw new Error(`No socket at index ${index}`);
       }
       return socket;
     },
+    input(id: string) {
+      return dom.window.document.getElementById(id) as HTMLInputElement;
+    },
+    textarea(id: string) {
+      return dom.window.document.getElementById(id) as HTMLTextAreaElement;
+    },
+    select(id: string) {
+      return dom.window.document.getElementById(id) as HTMLSelectElement;
+    },
+    text(id: string) {
+      return dom.window.document.getElementById(id)?.textContent?.trim() ?? "";
+    },
+    button(id: string) {
+      return dom.window.document.getElementById(id) as HTMLButtonElement;
+    },
+    panel(id: string) {
+      return dom.window.document.getElementById(id) as HTMLElement;
+    },
+    sessionButtons(): HTMLButtonElement[] {
+      return Array.from(dom.window.document.querySelectorAll("[data-session-id]")) as HTMLButtonElement[];
+    },
+    messageBlocks(): HTMLElement[] {
+      return Array.from(dom.window.document.getElementById("messages")?.children ?? []) as HTMLElement[];
+    },
+    queuedItems(): string[] {
+      return Array.from(dom.window.document.querySelectorAll("#queuedList li"))
+        .map((item) => (item as HTMLElement).textContent?.trim() ?? "");
+    },
+    projectPathOptions(): string[] {
+      return Array.from(dom.window.document.querySelectorAll("#projectPathOptions option"))
+        .map((item) => (item as HTMLOptionElement).value);
+    },
+    snapshotStorage(): Record<string, string> {
+      const snapshot: Record<string, string> = {};
+      for (let index = 0; index < dom.window.localStorage.length; index += 1) {
+        const key = dom.window.localStorage.key(index);
+        if (!key) {
+          continue;
+        }
+        snapshot[key] = dom.window.localStorage.getItem(key) ?? "";
+      }
+      return snapshot;
+    },
   };
-}
-
-function messageBodies(viewer: ReturnType<typeof bootViewer>): string[] {
-  return viewer
-    .element("messages")
-    .children
-    .map((card) => card.children[1]?.textContent ?? "");
-}
-
-function messageClasses(viewer: ReturnType<typeof bootViewer>): string[] {
-  return viewer
-    .element("messages")
-    .children
-    .map((card) => card.className);
 }
 
 function extractInlineScript(html: string): string {
@@ -230,183 +429,56 @@ function extractInlineScript(html: string): string {
   return match[1];
 }
 
-class FakeDocument {
-  private readonly elements = new Map<string, FakeElement>();
+class FakeWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 3;
+  static readonly instances: FakeWebSocket[] = [];
 
-  constructor() {
-    for (const id of [
-      "connectionDot",
-      "connectionLabel",
-      "runtimeLabel",
-      "bridgeUrl",
-      "connectBtn",
-      "projectPath",
-      "startBtn",
-      "promptInput",
-      "sendBtn",
-      "interruptBtn",
-      "messages",
-    ]) {
-      this.elements.set(id, new FakeElement(id));
-    }
+  public readonly sent: string[] = [];
+  public readonly listeners = new Map<string, Array<(event: { data?: string }) => void>>();
+  public readyState = FakeWebSocket.CONNECTING;
+
+  constructor(public readonly url: string) {
+    FakeWebSocket.instances.push(this);
   }
 
-  getElementById(id: string): FakeElement {
-    const element = this.elements.get(id);
-    if (!element) {
-      throw new Error(`Unknown element: ${id}`);
-    }
-    return element;
-  }
-
-  createElement(_tagName: string): FakeElement {
-    return new FakeElement();
-  }
-}
-
-class FakeClassList {
-  private readonly names = new Set<string>();
-
-  add(...classNames: string[]): void {
-    for (const className of classNames) {
-      if (className) {
-        this.names.add(className);
-      }
-    }
-  }
-
-  remove(...classNames: string[]): void {
-    for (const className of classNames) {
-      this.names.delete(className);
-    }
-  }
-
-  toggle(className: string, force?: boolean): boolean {
-    if (force === true) {
-      this.names.add(className);
-      return true;
-    }
-    if (force === false) {
-      this.names.delete(className);
-      return false;
-    }
-    if (this.names.has(className)) {
-      this.names.delete(className);
-      return false;
-    }
-    this.names.add(className);
-    return true;
-  }
-
-  toString(): string {
-    return Array.from(this.names).join(" ");
-  }
-}
-
-class FakeElement {
-  public readonly children: FakeElement[] = [];
-  public readonly classList = new FakeClassList();
-  public value = "";
-  public textContent = "";
-  public disabled = false;
-  public type = "";
-  public scrollTop = 0;
-  public scrollHeight = 0;
-  private readonly listeners = new Map<string, Array<(event: Record<string, unknown>) => void>>();
-
-  constructor(public readonly id = "") {}
-
-  get className(): string {
-    return this.classList.toString();
-  }
-
-  set className(value: string) {
-    this.classList.remove(...this.className.split(/\s+/).filter(Boolean));
-    this.classList.add(...String(value || "").split(/\s+/).filter(Boolean));
-  }
-
-  appendChild(child: FakeElement): FakeElement {
-    this.children.push(child);
-    this.textContent = this.children.map((item) => item.textContent).join("");
-    this.scrollHeight = this.children.length;
-    return child;
-  }
-
-  replaceChildren(...items: FakeElement[]): void {
-    this.children.length = 0;
-    if (items.length > 0) {
-      this.children.push(...items);
-    }
-    this.textContent = this.children.map((item) => item.textContent).join("");
-    this.scrollHeight = this.children.length;
-  }
-
-  addEventListener(type: string, listener: (event: Record<string, unknown>) => void): void {
+  addEventListener(type: string, listener: (event: { data?: string }) => void): void {
     const listeners = this.listeners.get(type) ?? [];
     listeners.push(listener);
     this.listeners.set(type, listeners);
   }
 
-  dispatch(type: string, event: Record<string, unknown> = {}): void {
+  send(payload: string): void {
+    this.sent.push(payload);
+  }
+
+  close(): void {
+    this.readyState = FakeWebSocket.CLOSED;
+    this.dispatch("close", {});
+  }
+
+  open(): void {
+    this.readyState = FakeWebSocket.OPEN;
+    this.dispatch("open", {});
+  }
+
+  receive(payload: Record<string, unknown>): void {
+    this.dispatch("message", { data: JSON.stringify(payload) });
+  }
+
+  clearSent(): void {
+    this.sent.length = 0;
+  }
+
+  sentJson(): Array<Record<string, unknown>> {
+    return this.sent.map((entry) => JSON.parse(entry) as Record<string, unknown>);
+  }
+
+  private dispatch(type: string, event: { data?: string }): void {
     const listeners = this.listeners.get(type) ?? [];
     for (const listener of listeners) {
-      listener({ target: this, currentTarget: this, ...event });
+      listener(event);
     }
   }
-}
-
-function createFakeWebSocketClass() {
-  return class FakeWebSocket {
-    static readonly CONNECTING = 0;
-    static readonly OPEN = 1;
-    static readonly CLOSED = 3;
-    static readonly instances: FakeWebSocket[] = [];
-
-    public readonly sent: string[] = [];
-    public readonly listeners = new Map<string, Array<(event: Record<string, unknown>) => void>>();
-    public readyState = FakeWebSocket.CONNECTING;
-
-    constructor(public readonly url: string) {
-      FakeWebSocket.instances.push(this);
-    }
-
-    addEventListener(type: string, listener: (event: Record<string, unknown>) => void): void {
-      const listeners = this.listeners.get(type) ?? [];
-      listeners.push(listener);
-      this.listeners.set(type, listeners);
-    }
-
-    send(payload: string): void {
-      this.sent.push(payload);
-    }
-
-    close(): void {
-      this.readyState = FakeWebSocket.CLOSED;
-      this.dispatch("close", {});
-    }
-
-    open(): void {
-      this.readyState = FakeWebSocket.OPEN;
-      this.dispatch("open", {});
-    }
-
-    receive(payload: Record<string, unknown>): void {
-      this.dispatch("message", { data: JSON.stringify(payload) });
-    }
-
-    sentJson(): Array<Record<string, unknown>> {
-      return this.sent.map((entry) => JSON.parse(entry));
-    }
-
-    clearSent(): void {
-      this.sent.length = 0;
-    }
-
-    private dispatch(type: string, event: Record<string, unknown>): void {
-      const listeners = this.listeners.get(type) ?? [];
-      for (const listener of listeners) {
-        listener(event);
-      }
-    }
-  };
 }

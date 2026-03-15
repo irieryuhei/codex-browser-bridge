@@ -1,11 +1,23 @@
 import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
 import { createServer, type Server as HttpServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
+import {
+  SessionStateStore,
+  type PersistedHistoryMessage,
+  type PersistedSessionRecord,
+} from "./session-state.js";
 import { renderViewerHtml } from "./viewer-html.js";
+
+export type PermissionMode = "default" | "plan";
+export type SessionStatus = "starting" | "idle" | "running" | "waiting_approval" | "stopped";
 
 export interface CodexSession {
   sendInput(text: string): void;
   interrupt(): void;
+  approve(toolUseId?: string, updatedInput?: Record<string, unknown>): void;
+  reject(toolUseId?: string, message?: string): void;
+  answer(toolUseId: string, result: string): void;
   onMessage(listener: (message: Record<string, unknown>) => void): void;
   stop(): void;
 }
@@ -14,6 +26,9 @@ export interface CodexSessionFactory {
   startSession(options: {
     projectPath: string;
     unrestricted: boolean;
+    model?: string;
+    modelReasoningEffort?: string;
+    permissionMode?: PermissionMode;
   }): Promise<CodexSession>;
 }
 
@@ -26,32 +41,150 @@ interface StartBridgeServerOptions {
   port: number;
   host?: string;
   codexFactory: CodexSessionFactory;
+  stateFilePath?: string;
 }
 
 type ClientMessage =
-  | { type: "start"; projectPath: string }
-  | { type: "input"; text: string }
-  | { type: "interrupt" };
+  | {
+      type: "start";
+      projectPath: string;
+      model?: string;
+      modelReasoningEffort?: string;
+      permissionMode?: PermissionMode;
+    }
+  | { type: "input"; sessionId: string; text: string }
+  | { type: "interrupt"; sessionId: string }
+  | { type: "approve"; sessionId: string; toolUseId?: string; updatedInput?: Record<string, unknown> }
+  | { type: "reject"; sessionId: string; toolUseId?: string; message?: string }
+  | { type: "answer"; sessionId: string; toolUseId: string; result: string }
+  | { type: "list_sessions" }
+  | { type: "get_history"; sessionId: string }
+  | { type: "set_session_pin"; sessionId: string; pinned: boolean }
+  | { type: "set_session_completion"; sessionId: string; completed: boolean };
 
-interface ActiveSession {
-  id: string;
-  projectPath: string;
-  codexSession: CodexSession;
+interface AssistantTextContent {
+  type: "text";
+  text: string;
 }
+
+interface AssistantToolUseContent {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: Record<string, unknown>;
+}
+
+interface AssistantMessage {
+  id: string;
+  role: "assistant";
+  content: Array<AssistantTextContent | AssistantToolUseContent>;
+  model: string;
+  phase?: "commentary" | "final_answer";
+}
+
+interface HistoryBase {
+  sessionId: string;
+  timestamp: string;
+}
+
+type HistoryMessage =
+  | (HistoryBase & { type: "user"; text: string })
+  | (HistoryBase & { type: "thinking_delta"; id?: string; text: string })
+  | (HistoryBase & { type: "stream_delta"; id?: string; text: string })
+  | (HistoryBase & { type: "assistant"; message: AssistantMessage })
+  | (HistoryBase & { type: "tool_result"; toolUseId: string; toolName?: string; content: string })
+  | (HistoryBase & { type: "error"; message: string });
+
+interface PendingPermission {
+  toolUseId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+}
+
+interface QueuedInput {
+  id: string;
+  text: string;
+  queuedAt: string;
+}
+
+interface SessionRecord {
+  sessionId: string;
+  projectPath: string;
+  title: string;
+  status: SessionStatus;
+  createdAt: string;
+  updatedAt: string;
+  model: string;
+  modelReasoningEffort: string;
+  permissionMode: PermissionMode;
+  pinned: boolean;
+  completed: boolean;
+  codexSession: CodexSession | null;
+  history: HistoryMessage[];
+  queuedInputs: QueuedInput[];
+  pendingPermission: PendingPermission | null;
+}
+
+interface SessionSummary {
+  sessionId: string;
+  title: string;
+  projectPath: string;
+  status: SessionStatus;
+  createdAt: string;
+  updatedAt: string;
+  model: string;
+  modelReasoningEffort: string;
+  permissionMode: PermissionMode;
+  pinned: boolean;
+  completed: boolean;
+  preview: string;
+  queueLength: number;
+  pendingPermission?: PendingPermission;
+}
+
+const MAX_HISTORY = 400;
 
 export async function startBridgeServer(
   options: StartBridgeServerOptions,
 ): Promise<BridgeServer> {
   const host = options.host ?? "127.0.0.1";
-  const activeSessions = new Map<WebSocket, ActiveSession>();
+  const sessions = new Map<string, SessionRecord>();
+  const clients = new Set<WebSocket>();
+  const stateStore = new SessionStateStore(options.stateFilePath ?? null);
+  const recentProjectPaths: string[] = [];
 
-  const stopActiveSession = (ws: WebSocket): void => {
-    const active = activeSessions.get(ws);
-    if (!active) {
+  const persistSessions = async (): Promise<void> => {
+    const persisted: PersistedSessionRecord[] = Array.from(sessions.values()).map((session) => ({
+      sessionId: session.sessionId,
+      projectPath: session.projectPath,
+      title: session.title,
+      status: session.codexSession ? session.status : "stopped",
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      model: session.model,
+      modelReasoningEffort: session.modelReasoningEffort,
+      permissionMode: session.permissionMode,
+      pinned: session.pinned,
+      completed: session.completed,
+      history: toPersistedHistory(session.history),
+      pendingPermission: session.codexSession ? session.pendingPermission : null,
+    }));
+    await stateStore.save({
+      sessions: persisted,
+      recentProjectPaths,
+    });
+  };
+
+  const rememberProjectPath = (projectPath: string): void => {
+    const normalized = projectPath.trim();
+    if (!normalized) {
       return;
     }
-    active.codexSession.stop();
-    activeSessions.delete(ws);
+    const next = [
+      normalized,
+      ...recentProjectPaths.filter((entry) => entry !== normalized),
+    ].slice(0, 12);
+    recentProjectPaths.splice(0, recentProjectPaths.length, ...next);
   };
 
   const httpServer = createServer((req, res) => {
@@ -72,11 +205,148 @@ export async function startBridgeServer(
   });
 
   const wss = new WebSocketServer({ server: httpServer });
+
+  const broadcast = (payload: unknown): void => {
+    for (const client of clients) {
+      send(client, payload);
+    }
+  };
+
+  const buildSessionSummary = (session: SessionRecord): SessionSummary => ({
+    sessionId: session.sessionId,
+    title: session.title,
+    projectPath: session.projectPath,
+    status: session.status,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    model: session.model,
+    modelReasoningEffort: session.modelReasoningEffort,
+    permissionMode: session.permissionMode,
+    pinned: session.pinned,
+    completed: session.completed,
+    preview: summarizeSessionPreview(session),
+    queueLength: session.queuedInputs.length,
+    ...(session.pendingPermission ? { pendingPermission: session.pendingPermission } : {}),
+  });
+
+  const buildSessionListPayload = (): Record<string, unknown> => ({
+    type: "session_list",
+    projectPaths: [...recentProjectPaths],
+    sessions: Array.from(sessions.values()).sort(compareSessionsForList).map(buildSessionSummary),
+  });
+
+  const broadcastSessionList = (): void => {
+    broadcast(buildSessionListPayload());
+  };
+
+  const pushHistory = (session: SessionRecord, message: HistoryMessage): void => {
+    session.history.push(message);
+    if (session.history.length > MAX_HISTORY) {
+      session.history.splice(0, session.history.length - MAX_HISTORY);
+    }
+    session.updatedAt = message.timestamp;
+    broadcast(message);
+    broadcastSessionList();
+    void persistSessions();
+  };
+
+  const dispatchQueuedInput = (session: SessionRecord): void => {
+    if (session.status !== "idle") {
+      return;
+    }
+    const next = session.queuedInputs.shift();
+    if (!next) {
+      return;
+    }
+    dispatchSessionInput(session, next.text);
+    broadcastSessionList();
+  };
+
+  const dispatchSessionInput = (session: SessionRecord, text: string): void => {
+    const timestamp = new Date().toISOString();
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    if (isDefaultSessionTitle(session.title, session.projectPath)) {
+      session.title = automaticSessionTitle(trimmed);
+    }
+
+    pushHistory(session, {
+      type: "user",
+      sessionId: session.sessionId,
+      text: trimmed,
+      timestamp,
+    });
+    session.codexSession?.sendInput(trimmed);
+  };
+
+  const handleSessionMessage = (session: SessionRecord, message: Record<string, unknown>): void => {
+    const timestamp = new Date().toISOString();
+
+    if (message.type === "status") {
+      session.status = normalizeStatus(message.status);
+      session.updatedAt = timestamp;
+      broadcast({
+        type: "status",
+        sessionId: session.sessionId,
+        status: session.status,
+        timestamp,
+      });
+      broadcastSessionList();
+      if (session.status === "idle") {
+        dispatchQueuedInput(session);
+      }
+      return;
+    }
+
+    if (message.type === "permission_request") {
+      const pendingPermission = normalizePendingPermission(message);
+      session.pendingPermission = pendingPermission;
+      session.updatedAt = timestamp;
+      broadcastSessionList();
+      void persistSessions();
+      return;
+    }
+
+    session.pendingPermission = null;
+
+    const historyMessage = normalizeHistoryMessage(session.sessionId, timestamp, message);
+    if (!historyMessage) {
+      broadcastSessionList();
+      return;
+    }
+
+    pushHistory(session, historyMessage);
+  };
+
   wss.on("connection", (ws) => {
+    clients.add(ws);
+
     ws.on("message", async (raw) => {
       const message = parseClientMessage(String(raw));
       if (!message) {
         send(ws, { type: "error", message: "Invalid message format" });
+        return;
+      }
+
+      if (message.type === "list_sessions") {
+        send(ws, buildSessionListPayload());
+        return;
+      }
+
+      if (message.type === "get_history") {
+        const session = sessions.get(message.sessionId);
+        if (!session) {
+          send(ws, { type: "error", message: `Session ${message.sessionId} was not found.` });
+          return;
+        }
+        send(ws, {
+          type: "history",
+          sessionId: session.sessionId,
+          messages: session.history,
+        });
         return;
       }
 
@@ -87,12 +357,13 @@ export async function startBridgeServer(
           return;
         }
 
-        stopActiveSession(ws);
-
         try {
           const codexSession = await options.codexFactory.startSession({
             projectPath,
             unrestricted: true,
+            model: normalizeModel(message.model),
+            modelReasoningEffort: normalizeModelReasoningEffort(message.modelReasoningEffort),
+            permissionMode: normalizePermissionMode(message.permissionMode),
           });
 
           if (ws.readyState !== WebSocket.OPEN) {
@@ -100,27 +371,52 @@ export async function startBridgeServer(
             return;
           }
 
-          const session: ActiveSession = {
-            id: randomUUID().slice(0, 8),
+          const now = new Date().toISOString();
+          rememberProjectPath(projectPath);
+          const session: SessionRecord = {
+            sessionId: randomUUID().slice(0, 8),
             projectPath,
+            title: defaultSessionTitle(projectPath),
+            status: "idle",
+            createdAt: now,
+            updatedAt: now,
+            model: normalizeModel(message.model),
+            modelReasoningEffort: normalizeModelReasoningEffort(message.modelReasoningEffort),
+            permissionMode: normalizePermissionMode(message.permissionMode),
+            pinned: false,
+            completed: false,
             codexSession,
+            history: [],
+            queuedInputs: [],
+            pendingPermission: null,
           };
-          activeSessions.set(ws, session);
+
+          sessions.set(session.sessionId, session);
           codexSession.onMessage((serverMessage) => {
-            const active = activeSessions.get(ws);
-            if (!active || active.id !== session.id) {
+            const active = sessions.get(session.sessionId);
+            if (!active) {
               return;
             }
-            send(ws, serverMessage);
+            handleSessionMessage(active, serverMessage);
           });
 
           send(ws, {
             type: "system",
             subtype: "session_created",
-            sessionId: session.id,
+            sessionId: session.sessionId,
             projectPath,
+            model: session.model,
+            modelReasoningEffort: session.modelReasoningEffort,
+            permissionMode: session.permissionMode,
           });
-          send(ws, { type: "status", status: "idle" });
+          send(ws, {
+            type: "status",
+            sessionId: session.sessionId,
+            status: "idle",
+            timestamp: now,
+          });
+          broadcastSessionList();
+          void persistSessions();
         } catch (error) {
           send(ws, {
             type: "error",
@@ -130,35 +426,152 @@ export async function startBridgeServer(
         return;
       }
 
-      const active = activeSessions.get(ws);
-      if (!active) {
-        send(ws, { type: "error", message: "No active session. Send 'start' first." });
+      const session = sessions.get(message.sessionId);
+      if (!session) {
+        send(ws, { type: "error", message: `Session ${message.sessionId} was not found.` });
         return;
       }
 
-      if (message.type === "input") {
-        const text = message.text.trim();
-        if (!text) {
-          send(ws, { type: "error", message: "Prompt text is required." });
+      if (!session.codexSession && message.type !== "set_session_pin" && message.type !== "set_session_completion") {
+        send(ws, {
+          type: "error",
+          message: `Session ${message.sessionId} is restored history only.`,
+        });
+        return;
+      }
+
+      switch (message.type) {
+        case "input": {
+          const text = message.text.trim();
+          if (!text) {
+            send(ws, { type: "error", message: "Prompt text is required." });
+            return;
+          }
+
+          if (session.status !== "idle") {
+            session.queuedInputs.push({
+              id: randomUUID().slice(0, 8),
+              text,
+              queuedAt: new Date().toISOString(),
+            });
+            session.updatedAt = new Date().toISOString();
+            send(ws, {
+              type: "input_ack",
+              sessionId: session.sessionId,
+              queued: true,
+              text,
+            });
+            broadcastSessionList();
+            void persistSessions();
+            return;
+          }
+
+          dispatchSessionInput(session, text);
+          send(ws, {
+            type: "input_ack",
+            sessionId: session.sessionId,
+            queued: false,
+            text,
+          });
           return;
         }
 
-        send(ws, { type: "user", text });
-        active.codexSession.sendInput(text);
-        return;
-      }
+        case "interrupt":
+          if (!session.codexSession) {
+            send(ws, {
+              type: "error",
+              message: `Session ${message.sessionId} is restored history only.`,
+            });
+            return;
+          }
+          session.codexSession.interrupt();
+          return;
 
-      if (message.type === "interrupt") {
-        active.codexSession.interrupt();
+        case "approve":
+          if (!session.codexSession) {
+            send(ws, {
+              type: "error",
+              message: `Session ${message.sessionId} is restored history only.`,
+            });
+            return;
+          }
+          session.pendingPermission = null;
+          session.codexSession.approve(message.toolUseId, message.updatedInput);
+          broadcastSessionList();
+          return;
+
+        case "reject":
+          if (!session.codexSession) {
+            send(ws, {
+              type: "error",
+              message: `Session ${message.sessionId} is restored history only.`,
+            });
+            return;
+          }
+          session.pendingPermission = null;
+          session.codexSession.reject(message.toolUseId, message.message);
+          broadcastSessionList();
+          return;
+
+        case "answer":
+          if (!session.codexSession) {
+            send(ws, {
+              type: "error",
+              message: `Session ${message.sessionId} is restored history only.`,
+            });
+            return;
+          }
+          session.pendingPermission = null;
+          session.codexSession.answer(message.toolUseId, message.result);
+          broadcastSessionList();
+          return;
+
+        case "set_session_pin":
+          session.pinned = message.pinned;
+          session.updatedAt = new Date().toISOString();
+          broadcastSessionList();
+          void persistSessions();
+          return;
+
+        case "set_session_completion":
+          session.completed = message.completed;
+          session.updatedAt = new Date().toISOString();
+          broadcastSessionList();
+          void persistSessions();
+          return;
       }
     });
 
     ws.on("close", () => {
-      stopActiveSession(ws);
+      clients.delete(ws);
     });
   });
 
   await listen(httpServer, options.port, host);
+  const persistedState = await stateStore.load();
+  recentProjectPaths.splice(0, recentProjectPaths.length, ...persistedState.recentProjectPaths);
+  persistedState.sessions.forEach((restored) => {
+    if (!recentProjectPaths.includes(restored.projectPath)) {
+      rememberProjectPath(restored.projectPath);
+    }
+    sessions.set(restored.sessionId, {
+      sessionId: restored.sessionId,
+      projectPath: restored.projectPath,
+      title: restored.title,
+      status: "stopped",
+      createdAt: restored.createdAt,
+      updatedAt: restored.updatedAt,
+      model: restored.model,
+      modelReasoningEffort: restored.modelReasoningEffort,
+      permissionMode: normalizePermissionMode(restored.permissionMode),
+      pinned: restored.pinned,
+      completed: restored.completed,
+      codexSession: null,
+      history: fromPersistedHistory(restored.history),
+      queuedInputs: [],
+      pendingPermission: null,
+    });
+  });
   const address = httpServer.address();
   if (!address || typeof address === "string") {
     throw new Error("Failed to determine listening port");
@@ -167,10 +580,11 @@ export async function startBridgeServer(
   return {
     port: address.port,
     async close() {
-      for (const session of activeSessions.values()) {
-        session.codexSession.stop();
+      await persistSessions();
+      for (const session of sessions.values()) {
+        session.codexSession?.stop();
       }
-      activeSessions.clear();
+      sessions.clear();
       for (const client of wss.clients) {
         client.close();
       }
@@ -201,22 +615,396 @@ export async function startBridgeServer(
 function parseClientMessage(raw: string): ClientMessage | null {
   try {
     const data = JSON.parse(raw) as Record<string, unknown>;
+
     if (data.type === "start" && typeof data.projectPath === "string") {
-      return { type: "start", projectPath: data.projectPath };
+      return {
+        type: "start",
+        projectPath: data.projectPath,
+        ...(typeof data.model === "string" ? { model: data.model } : {}),
+        ...(typeof data.modelReasoningEffort === "string"
+          ? { modelReasoningEffort: data.modelReasoningEffort }
+          : {}),
+        ...(data.permissionMode === "plan" ? { permissionMode: "plan" as const } : {}),
+      };
     }
-    if (data.type === "input" && typeof data.text === "string") {
-      return { type: "input", text: data.text };
+
+    if (data.type === "input" && typeof data.sessionId === "string" && typeof data.text === "string") {
+      return { type: "input", sessionId: data.sessionId, text: data.text };
     }
-    if (data.type === "interrupt") {
-      return { type: "interrupt" };
+
+    if (data.type === "interrupt" && typeof data.sessionId === "string") {
+      return { type: "interrupt", sessionId: data.sessionId };
     }
+
+    if (data.type === "approve" && typeof data.sessionId === "string") {
+      return {
+        type: "approve",
+        sessionId: data.sessionId,
+        ...(typeof data.toolUseId === "string" ? { toolUseId: data.toolUseId } : {}),
+        ...(isRecord(data.updatedInput) ? { updatedInput: data.updatedInput } : {}),
+      };
+    }
+
+    if (data.type === "reject" && typeof data.sessionId === "string") {
+      return {
+        type: "reject",
+        sessionId: data.sessionId,
+        ...(typeof data.toolUseId === "string" ? { toolUseId: data.toolUseId } : {}),
+        ...(typeof data.message === "string" ? { message: data.message } : {}),
+      };
+    }
+
+    if (
+      data.type === "answer"
+      && typeof data.sessionId === "string"
+      && typeof data.toolUseId === "string"
+      && typeof data.result === "string"
+    ) {
+      return {
+        type: "answer",
+        sessionId: data.sessionId,
+        toolUseId: data.toolUseId,
+        result: data.result,
+      };
+    }
+
+    if (data.type === "list_sessions") {
+      return { type: "list_sessions" };
+    }
+
+    if (data.type === "get_history" && typeof data.sessionId === "string") {
+      return { type: "get_history", sessionId: data.sessionId };
+    }
+
+    if (
+      data.type === "set_session_pin"
+      && typeof data.sessionId === "string"
+      && typeof data.pinned === "boolean"
+    ) {
+      return { type: "set_session_pin", sessionId: data.sessionId, pinned: data.pinned };
+    }
+
+    if (
+      data.type === "set_session_completion"
+      && typeof data.sessionId === "string"
+      && typeof data.completed === "boolean"
+    ) {
+      return {
+        type: "set_session_completion",
+        sessionId: data.sessionId,
+        completed: data.completed,
+      };
+    }
+
     return null;
   } catch {
     return null;
   }
 }
 
-function send(ws: WebSocket, payload: Record<string, unknown>): void {
+function normalizeHistoryMessage(
+  sessionId: string,
+  timestamp: string,
+  message: Record<string, unknown>,
+): HistoryMessage | null {
+  if (message.type === "thinking_delta" && typeof message.text === "string") {
+    return {
+      type: "thinking_delta",
+      sessionId,
+      timestamp,
+      text: message.text,
+      ...(typeof message.id === "string" ? { id: message.id } : {}),
+    };
+  }
+
+  if (message.type === "stream_delta" && typeof message.text === "string") {
+    return {
+      type: "stream_delta",
+      sessionId,
+      timestamp,
+      text: message.text,
+      ...(typeof message.id === "string" ? { id: message.id } : {}),
+    };
+  }
+
+  if (message.type === "assistant" && isRecord(message.message)) {
+    const normalizedMessage = normalizeAssistantMessage(message.message);
+    if (!normalizedMessage) {
+      return null;
+    }
+    return {
+      type: "assistant",
+      sessionId,
+      timestamp,
+      message: normalizedMessage,
+    };
+  }
+
+  if (
+    message.type === "tool_result"
+    && typeof message.toolUseId === "string"
+    && typeof message.content === "string"
+  ) {
+    return {
+      type: "tool_result",
+      sessionId,
+      timestamp,
+      toolUseId: message.toolUseId,
+      content: message.content,
+      ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
+    };
+  }
+
+  if (message.type === "error" && typeof message.message === "string") {
+    return {
+      type: "error",
+      sessionId,
+      timestamp,
+      message: message.message,
+    };
+  }
+
+  return null;
+}
+
+function normalizeAssistantMessage(value: Record<string, unknown>): AssistantMessage | null {
+  if (
+    typeof value.id !== "string"
+    || value.role !== "assistant"
+    || !Array.isArray(value.content)
+    || typeof value.model !== "string"
+  ) {
+    return null;
+  }
+
+  const content: Array<AssistantTextContent | AssistantToolUseContent> = [];
+  value.content.forEach((entry) => {
+    if (!isRecord(entry) || typeof entry.type !== "string") {
+      return;
+    }
+    if (entry.type === "text" && typeof entry.text === "string") {
+      content.push({ type: "text", text: entry.text });
+      return;
+    }
+    if (
+      entry.type === "tool_use"
+      && typeof entry.id === "string"
+      && typeof entry.name === "string"
+      && isRecord(entry.input)
+    ) {
+      content.push({
+        type: "tool_use",
+        id: entry.id,
+        name: entry.name,
+        input: entry.input,
+      });
+      return;
+    }
+  });
+
+  return {
+    id: value.id,
+    role: "assistant",
+    content,
+    model: value.model,
+    ...(value.phase === "commentary" || value.phase === "final_answer"
+      ? { phase: value.phase }
+      : {}),
+  };
+}
+
+function toPersistedHistory(history: HistoryMessage[]): PersistedHistoryMessage[] {
+  return history.map((message) => ({ ...message }));
+}
+
+function fromPersistedHistory(history: PersistedHistoryMessage[]): HistoryMessage[] {
+  const restored: HistoryMessage[] = [];
+
+  history.forEach((message) => {
+    if (message.type === "user" && typeof message.text === "string") {
+      restored.push({
+        type: "user",
+        sessionId: message.sessionId,
+        timestamp: message.timestamp,
+        text: message.text,
+      });
+      return;
+    }
+
+    if (message.type === "thinking_delta" && typeof message.text === "string") {
+      restored.push({
+        type: "thinking_delta",
+        sessionId: message.sessionId,
+        timestamp: message.timestamp,
+        text: message.text,
+        ...(typeof message.id === "string" ? { id: message.id } : {}),
+      });
+      return;
+    }
+
+    if (message.type === "stream_delta" && typeof message.text === "string") {
+      restored.push({
+        type: "stream_delta",
+        sessionId: message.sessionId,
+        timestamp: message.timestamp,
+        text: message.text,
+        ...(typeof message.id === "string" ? { id: message.id } : {}),
+      });
+      return;
+    }
+
+    if (message.type === "assistant" && isRecord(message.message)) {
+      const normalized = normalizeAssistantMessage(message.message);
+      if (!normalized) {
+        return;
+      }
+      restored.push({
+        type: "assistant",
+        sessionId: message.sessionId,
+        timestamp: message.timestamp,
+        message: normalized,
+      });
+      return;
+    }
+
+    if (
+      message.type === "tool_result"
+      && typeof message.toolUseId === "string"
+      && typeof message.content === "string"
+    ) {
+      restored.push({
+        type: "tool_result",
+        sessionId: message.sessionId,
+        timestamp: message.timestamp,
+        toolUseId: message.toolUseId,
+        content: message.content,
+        ...(typeof message.toolName === "string" ? { toolName: message.toolName } : {}),
+      });
+      return;
+    }
+
+    if (message.type === "error" && typeof message.message === "string") {
+      restored.push({
+        type: "error",
+        sessionId: message.sessionId,
+        timestamp: message.timestamp,
+        message: message.message,
+      });
+    }
+  });
+
+  return restored;
+}
+
+function normalizePendingPermission(message: Record<string, unknown>): PendingPermission {
+  return {
+    toolUseId: typeof message.toolUseId === "string" ? message.toolUseId : randomUUID().slice(0, 8),
+    toolName: typeof message.toolName === "string" ? message.toolName : "Approval",
+    input: isRecord(message.input) ? message.input : {},
+  };
+}
+
+function normalizeStatus(value: unknown): SessionStatus {
+  return value === "running" || value === "waiting_approval" || value === "starting"
+    ? value
+    : "idle";
+}
+
+function normalizePermissionMode(value: unknown): PermissionMode {
+  return value === "plan" ? "plan" : "default";
+}
+
+function normalizeModel(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeModelReasoningEffort(value: unknown): string {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalized === "minimal"
+    || normalized === "low"
+    || normalized === "medium"
+    || normalized === "high"
+    || normalized === "xhigh"
+    ? normalized
+    : "";
+}
+
+function defaultSessionTitle(projectPath: string): string {
+  const short = basename(projectPath.trim()) || "Codex";
+  return `New Chat: ${short}`;
+}
+
+function isDefaultSessionTitle(title: string, projectPath: string): boolean {
+  return title === defaultSessionTitle(projectPath);
+}
+
+function automaticSessionTitle(text: string): string {
+  const firstMeaningfulLine = text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstMeaningfulLine) {
+    return "New Chat";
+  }
+  const collapsed = firstMeaningfulLine.replace(/\s+/gu, " ").trim();
+  return collapsed.length > 80 ? `${collapsed.slice(0, 77).trimEnd()}...` : collapsed;
+}
+
+function summarizeSessionPreview(session: SessionRecord): string {
+  for (let index = session.history.length - 1; index >= 0; index -= 1) {
+    const item = session.history[index];
+    if (!item) {
+      continue;
+    }
+    if (item.type === "assistant") {
+      const text = item.message.content
+        .filter((entry): entry is AssistantTextContent => entry.type === "text")
+        .map((entry) => entry.text.trim())
+        .filter(Boolean)
+        .join("\n");
+      if (text) {
+        return collapseWhitespace(text);
+      }
+      const toolUse = item.message.content.find(
+        (entry): entry is AssistantToolUseContent => entry.type === "tool_use",
+      );
+      if (toolUse) {
+        return collapseWhitespace(String(toolUse.input.command ?? toolUse.name));
+      }
+    }
+    if (item.type === "user") {
+      return collapseWhitespace(item.text);
+    }
+    if (item.type === "tool_result") {
+      return collapseWhitespace(item.content);
+    }
+    if (item.type === "error") {
+      return collapseWhitespace(item.message);
+    }
+  }
+  return "";
+}
+
+function collapseWhitespace(value: string): string {
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  if (normalized.length <= 90) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 87).trimEnd()}...`;
+}
+
+function compareSessionsForList(left: SessionRecord, right: SessionRecord): number {
+  if (left.pinned !== right.pinned) {
+    return left.pinned ? -1 : 1;
+  }
+  return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function send(ws: WebSocket, payload: unknown): void {
   if (ws.readyState !== WebSocket.OPEN) {
     return;
   }
