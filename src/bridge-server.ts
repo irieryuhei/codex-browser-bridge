@@ -264,13 +264,15 @@ export async function startBridgeServer(
   };
 
   const httpServer = createServer((req, res) => {
-    if (req.method === "GET" && req.url === "/") {
+    const requestPath = (req.url ?? "/").split("?", 1)[0]?.split("#", 1)[0] || "/";
+
+    if (req.method === "GET" && requestPath === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(renderViewerHtml());
       return;
     }
 
-    if (req.method === "GET" && req.url === "/health") {
+    if (req.method === "GET" && requestPath === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ status: "ok" }));
       return;

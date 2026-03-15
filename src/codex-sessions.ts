@@ -251,7 +251,7 @@ export async function getStoredCodexSessionHistory(
     });
   });
 
-  return messages;
+  return dedupeStoredHistory(messages);
 }
 
 async function listJsonlFiles(root: string): Promise<string[]> {
@@ -504,6 +504,54 @@ function extractFallbackSessionId(filePath: string): string {
   const fileName = basename(filePath, ".jsonl");
   const match = fileName.match(/([0-9a-f]{8}-[0-9a-f-]{27,})$/i);
   return match?.[1] ?? fileName;
+}
+
+function dedupeStoredHistory(messages: CodexHistoryMessage[]): CodexHistoryMessage[] {
+  const seen = new Set<string>();
+  return messages.filter((message) => {
+    const fingerprint = getStoredHistoryFingerprint(message);
+    if (!fingerprint) {
+      return true;
+    }
+    if (seen.has(fingerprint)) {
+      return false;
+    }
+    seen.add(fingerprint);
+    return true;
+  });
+}
+
+function getStoredHistoryFingerprint(message: CodexHistoryMessage): string | null {
+  if (message.type === "user") {
+    return [
+      "user",
+      message.timestamp,
+      normalizeStoredHistoryText(message.text),
+    ].join("\u0000");
+  }
+
+  if (message.type !== "assistant") {
+    return null;
+  }
+
+  const text = message.message.content
+    .filter((item): item is AssistantTextContent => item.type === "text")
+    .map((item) => item.text)
+    .join("\n");
+  if (!text.trim()) {
+    return null;
+  }
+
+  return [
+    "assistant",
+    message.timestamp,
+    message.message.phase ?? "",
+    normalizeStoredHistoryText(text),
+  ].join("\u0000");
+}
+
+function normalizeStoredHistoryText(text: string): string {
+  return text.trim();
 }
 
 function parseToolUsePayload(

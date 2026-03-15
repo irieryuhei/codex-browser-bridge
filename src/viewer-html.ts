@@ -24,6 +24,7 @@ export function renderViewerHtml(): string {
       --error: #fff0ef;
       --queued: #f7f2df;
       --shadow: 0 24px 52px rgba(26, 37, 44, 0.09);
+      --list-panel-width: 380px;
       font-family: "IBM Plex Sans", "Noto Sans JP", sans-serif;
     }
 
@@ -47,9 +48,14 @@ export function renderViewerHtml(): string {
 
     .layout {
       display: grid;
-      gap: 16px;
-      grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+      gap: 0;
+      grid-template-columns: var(--list-panel-width) 18px minmax(0, 1fr);
       align-items: start;
+    }
+
+    body.resizing {
+      cursor: col-resize;
+      user-select: none;
     }
 
     .panel {
@@ -64,6 +70,42 @@ export function renderViewerHtml(): string {
     #listPanel {
       max-height: calc(100vh - 32px);
       overflow: auto;
+    }
+
+    .list-resizer {
+      position: relative;
+      align-self: stretch;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      cursor: col-resize;
+      touch-action: none;
+    }
+
+    .list-resizer:hover {
+      transform: none;
+    }
+
+    .list-resizer::before {
+      content: "";
+      position: absolute;
+      inset: 14px 7px;
+      border-radius: 999px;
+      background:
+        linear-gradient(180deg, rgba(15, 118, 110, 0.1), rgba(15, 118, 110, 0.3), rgba(15, 118, 110, 0.1));
+      transition: transform 120ms ease, background 120ms ease;
+    }
+
+    .list-resizer:hover::before,
+    .list-resizer:focus-visible::before,
+    body.resizing .list-resizer::before {
+      transform: scaleX(1.15);
+      background:
+        linear-gradient(180deg, rgba(15, 118, 110, 0.16), rgba(15, 118, 110, 0.52), rgba(15, 118, 110, 0.16));
+    }
+
+    .list-resizer:focus-visible {
+      outline: none;
     }
 
     .panel-header {
@@ -82,6 +124,32 @@ export function renderViewerHtml(): string {
       display: grid;
       gap: 8px;
       margin-top: 12px;
+    }
+
+    .session-filter-row {
+      display: grid;
+      gap: 8px;
+    }
+
+    .filter-toggle-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      align-items: center;
+    }
+
+    .filter-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .filter-toggle input {
+      width: auto;
+      margin: 0;
     }
 
     .session-list-nav {
@@ -424,8 +492,6 @@ export function renderViewerHtml(): string {
 
     .message-card {
       padding: 14px 16px;
-      white-space: pre-wrap;
-      line-height: 1.6;
     }
 
     .message-card.commentary { background: var(--commentary); }
@@ -433,6 +499,61 @@ export function renderViewerHtml(): string {
     .message-card.tool { background: var(--tool); }
     .message-card.user { background: var(--user); }
     .message-card.error { background: var(--error); }
+    .message-card-footer {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 10px;
+    }
+
+    .message-body {
+      white-space: pre-wrap;
+      line-height: 1.6;
+      position: relative;
+    }
+
+    .message-card.final.expandable .message-body {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 5;
+      overflow: hidden;
+    }
+
+    .message-card.final.expandable:not([data-expanded="true"]) .message-body::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 2.4em;
+      background: linear-gradient(180deg, rgba(253, 241, 227, 0), var(--final));
+      pointer-events: none;
+    }
+
+    .message-card.final[data-expanded="true"] .message-body {
+      display: block;
+      overflow: visible;
+      -webkit-line-clamp: unset;
+    }
+
+    .message-expand-toggle {
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--accent-strong);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .message-expand-toggle:hover {
+      transform: none;
+      text-decoration: underline;
+    }
+
+    .message-expand-toggle:focus-visible {
+      outline: 2px solid rgba(15, 118, 110, 0.32);
+      outline-offset: 2px;
+    }
 
     .message-header {
       font-size: 12px;
@@ -509,6 +630,7 @@ export function renderViewerHtml(): string {
     @media (max-width: 980px) {
       .layout {
         grid-template-columns: 1fr;
+        gap: 16px;
       }
 
       .layout.mobile-list-open #viewerPanel {
@@ -526,6 +648,10 @@ export function renderViewerHtml(): string {
       #listPanel {
         max-height: none;
         overflow: visible;
+      }
+
+      .list-resizer {
+        display: none;
       }
 
       .viewer {
@@ -621,6 +747,25 @@ export function renderViewerHtml(): string {
           <h2>Conversation List</h2>
           <div class="session-list-controls">
             <input id="sessionFilterInput" type="text" placeholder="Filter conversations">
+            <div class="session-filter-row">
+              <select id="sessionRepoFilter">
+                <option value="">All repositories</option>
+              </select>
+              <div class="filter-toggle-row">
+                <label class="filter-toggle">
+                  <input id="unreadOnlyFilter" type="checkbox">
+                  <span>Unread</span>
+                </label>
+                <label class="filter-toggle">
+                  <input id="settledOnlyFilter" type="checkbox">
+                  <span>Settled</span>
+                </label>
+                <label class="filter-toggle">
+                  <input id="showCompletedFilter" type="checkbox" checked>
+                  <span>Completed</span>
+                </label>
+              </div>
+            </div>
             <div class="session-list-nav">
               <button id="sessionListPrevBtn" class="secondary" type="button" disabled>Prev</button>
               <button id="sessionListNextBtn" class="secondary" type="button" disabled>Next</button>
@@ -630,6 +775,19 @@ export function renderViewerHtml(): string {
         </div>
         <div id="sessionsList" class="sessions"></div>
       </section>
+
+      <button
+        id="listResizeHandle"
+        class="list-resizer"
+        type="button"
+        aria-label="Resize conversation list"
+        aria-controls="listPanel"
+        aria-orientation="vertical"
+        aria-valuemin="280"
+        aria-valuemax="720"
+        aria-valuenow="380"
+        title="Drag to resize the conversation list"
+      ></button>
 
       <section id="viewerPanel" class="panel viewer">
         <div class="viewer-head">
@@ -696,6 +854,10 @@ export function renderViewerHtml(): string {
     const permissionModeSelect = document.getElementById("permissionMode");
     const startBtn = document.getElementById("startBtn");
     const sessionFilterInput = document.getElementById("sessionFilterInput");
+    const sessionRepoFilter = document.getElementById("sessionRepoFilter");
+    const unreadOnlyFilter = document.getElementById("unreadOnlyFilter");
+    const settledOnlyFilter = document.getElementById("settledOnlyFilter");
+    const showCompletedFilter = document.getElementById("showCompletedFilter");
     const sessionListPrevBtn = document.getElementById("sessionListPrevBtn");
     const sessionListNextBtn = document.getElementById("sessionListNextBtn");
     const sessionListSummary = document.getElementById("sessionListSummary");
@@ -708,8 +870,10 @@ export function renderViewerHtml(): string {
     const viewerBackBtn = document.getElementById("viewerBackBtn");
     const viewerPinBtn = document.getElementById("viewerPinBtn");
     const viewerCompleteBtn = document.getElementById("viewerCompleteBtn");
+    const layout = document.querySelector(".layout");
     const viewerPanel = document.getElementById("viewerPanel");
     const listPanel = document.getElementById("listPanel");
+    const listResizeHandle = document.getElementById("listResizeHandle");
     const permissionPanel = document.getElementById("permissionPanel");
     const queuedPanel = document.getElementById("queuedPanel");
     const queuedList = document.getElementById("queuedList");
@@ -727,12 +891,22 @@ export function renderViewerHtml(): string {
       selectedSessionId: "",
       queuedDrafts: new Map(),
       outboundQueue: [],
-      savedProjectPaths: [],
       hydratedProjectPaths: false,
+      sharedProjectPaths: [],
       sessionListOffset: 0,
+      unreadSessionIds: new Set(),
+      expandedFinalAnswerKeys: new Set(),
+      listPanelWidth: null,
+      activeListResize: null,
     };
     const STORAGE_KEY = "codex-browser-bridge.viewer";
     const MAX_VISIBLE_SESSIONS = 10;
+    const DEFAULT_LIST_PANEL_WIDTH = 380;
+    const MIN_LIST_PANEL_WIDTH = 280;
+    const MAX_LIST_PANEL_WIDTH = 720;
+    const MIN_VIEWER_PANEL_WIDTH = 420;
+    const LIST_RESIZER_WIDTH = 18;
+    const FINAL_ANSWER_PREVIEW_LINES = 5;
 
     function defaultSocketUrl() {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -748,35 +922,26 @@ export function renderViewerHtml(): string {
       try {
         const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
         if (!parsed || typeof parsed !== "object") {
-          return { projectPath: "", projectPaths: [] };
+          return { projectPath: "", listPanelWidth: null };
         }
+        const savedWidth = Number(parsed.listPanelWidth);
         return {
           projectPath: typeof parsed.projectPath === "string" ? parsed.projectPath : "",
-          projectPaths: normalizeProjectPaths(parsed.projectPaths),
+          listPanelWidth: Number.isFinite(savedWidth) && savedWidth > 0 ? savedWidth : null,
         };
       } catch {
-        return { projectPath: "", projectPaths: [] };
+        return { projectPath: "", listPanelWidth: null };
       }
     }
 
     function saveState() {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      const nextState = {
         projectPath: projectPathInput.value,
-        projectPaths: state.savedProjectPaths,
-      }));
-    }
-
-    function rememberProjectPath(projectPath) {
-      const normalized = String(projectPath || "").trim();
-      if (!normalized) {
-        return;
+      };
+      if (Number.isFinite(state.listPanelWidth) && state.listPanelWidth > 0) {
+        nextState.listPanelWidth = Math.round(state.listPanelWidth);
       }
-      state.savedProjectPaths = normalizeProjectPaths([
-        normalized,
-        ...state.savedProjectPaths.filter((entry) => entry !== normalized),
-      ]);
-      renderProjectPathOptions();
-      saveState();
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
     }
 
     function normalizeProjectPaths(projectPaths) {
@@ -796,11 +961,31 @@ export function renderViewerHtml(): string {
       return unique.slice(0, 12);
     }
 
-    function renderProjectPathOptions() {
-      const pickerPaths = normalizeProjectPaths([
-        projectPathInput.value,
-        ...state.savedProjectPaths,
+    function projectPathsFromRecentConversations() {
+      const unique = [];
+      const seen = new Set();
+      state.sessions.slice(0, MAX_VISIBLE_SESSIONS).forEach((session) => {
+        const normalized = typeof session?.projectPath === "string"
+          ? session.projectPath.trim()
+          : "";
+        if (!normalized || seen.has(normalized)) {
+          return;
+        }
+        seen.add(normalized);
+        unique.push(normalized);
+      });
+      return unique;
+    }
+
+    function projectPathChoices() {
+      return normalizeProjectPaths([
+        ...projectPathsFromRecentConversations(),
+        ...state.sharedProjectPaths,
       ]);
+    }
+
+    function renderProjectPathOptions() {
+      const pickerPaths = projectPathChoices();
       const duplicateShortProjects = new Set();
       const shortProjectCounts = new Map();
       pickerPaths.forEach((projectPath) => {
@@ -812,15 +997,10 @@ export function renderViewerHtml(): string {
         }
       });
       projectPathPicker.replaceChildren();
-      if (pickerPaths.length === 0) {
-        const placeholder = document.createElement("option");
-        placeholder.value = "";
-        placeholder.textContent = "Select a repository";
-        projectPathPicker.appendChild(placeholder);
-        projectPathPicker.hidden = false;
-        syncProjectPathPicker();
-        return;
-      }
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Select a repository";
+      projectPathPicker.appendChild(placeholder);
       pickerPaths.forEach((projectPath) => {
         const option = document.createElement("option");
         option.value = projectPath;
@@ -834,15 +1014,15 @@ export function renderViewerHtml(): string {
 
     function syncProjectPathPicker() {
       const normalized = String(projectPathInput.value || "").trim();
-      if (!normalized || !state.savedProjectPaths.includes(normalized)) {
-        if (Array.from(projectPathPicker.options).some((option) => option.value === normalized)) {
-          projectPathPicker.value = normalized;
-          return;
-        }
-        projectPathPicker.value = projectPathPicker.options[0]?.value ?? "";
+      if (!normalized) {
+        projectPathPicker.value = "";
         return;
       }
-      projectPathPicker.value = normalized;
+      if (Array.from(projectPathPicker.options).some((option) => option.value === normalized)) {
+        projectPathPicker.value = normalized;
+        return;
+      }
+      projectPathPicker.value = "";
     }
 
     function send(payload) {
@@ -943,14 +1123,113 @@ export function renderViewerHtml(): string {
       return window.innerWidth <= 980;
     }
 
+    function availableLayoutWidth() {
+      if (layout && typeof layout.getBoundingClientRect === "function") {
+        const layoutWidth = layout.getBoundingClientRect().width;
+        if (layoutWidth > 0) {
+          return layoutWidth;
+        }
+      }
+      return Math.max(0, Math.min(window.innerWidth - 24, 1380));
+    }
+
+    function listPanelWidthBounds() {
+      const maxFromViewport = availableLayoutWidth() - MIN_VIEWER_PANEL_WIDTH - LIST_RESIZER_WIDTH;
+      return {
+        min: MIN_LIST_PANEL_WIDTH,
+        max: Math.max(MIN_LIST_PANEL_WIDTH, Math.min(MAX_LIST_PANEL_WIDTH, maxFromViewport)),
+      };
+    }
+
+    function currentListPanelWidth() {
+      if (Number.isFinite(state.listPanelWidth) && state.listPanelWidth > 0) {
+        return state.listPanelWidth;
+      }
+      if (listPanel && typeof listPanel.getBoundingClientRect === "function") {
+        const panelWidth = listPanel.getBoundingClientRect().width;
+        if (panelWidth > 0) {
+          return panelWidth;
+        }
+      }
+      return DEFAULT_LIST_PANEL_WIDTH;
+    }
+
+    function updateListResizeHandle() {
+      if (!listResizeHandle) {
+        return;
+      }
+      const bounds = listPanelWidthBounds();
+      const currentWidth = Math.round(currentListPanelWidth());
+      listResizeHandle.setAttribute("role", "separator");
+      listResizeHandle.setAttribute("aria-valuemin", String(bounds.min));
+      listResizeHandle.setAttribute("aria-valuemax", String(bounds.max));
+      listResizeHandle.setAttribute("aria-valuenow", String(currentWidth));
+    }
+
+    function applyListPanelWidth(nextWidth) {
+      if (!layout) {
+        return;
+      }
+      const bounds = listPanelWidthBounds();
+      const clampedWidth = Math.round(Math.max(bounds.min, Math.min(bounds.max, nextWidth)));
+      state.listPanelWidth = clampedWidth;
+      layout.style.setProperty("--list-panel-width", clampedWidth + "px");
+      updateListResizeHandle();
+      syncExpandableFinalAnswerCards();
+    }
+
+    function stopListResize(shouldPersist) {
+      if (!state.activeListResize) {
+        return;
+      }
+      state.activeListResize = null;
+      document.body.classList.remove("resizing");
+      window.removeEventListener("mousemove", handleListResizeMove);
+      window.removeEventListener("mouseup", handleListResizeStop);
+      if (shouldPersist) {
+        saveState();
+      }
+    }
+
+    function handleListResizeMove(event) {
+      if (!state.activeListResize || isMobileViewport()) {
+        return;
+      }
+      const nextWidth = state.activeListResize.startWidth + (event.clientX - state.activeListResize.startX);
+      applyListPanelWidth(nextWidth);
+    }
+
+    function handleListResizeStop() {
+      stopListResize(true);
+    }
+
+    function startListResize(clientX) {
+      if (!layout || isMobileViewport()) {
+        return;
+      }
+      state.activeListResize = {
+        startX: clientX,
+        startWidth: currentListPanelWidth(),
+      };
+      document.body.classList.add("resizing");
+      window.addEventListener("mousemove", handleListResizeMove);
+      window.addEventListener("mouseup", handleListResizeStop);
+    }
+
     function updateResponsiveLayout() {
       const mobile = isMobileViewport();
       const hasSelection = !!state.selectedSessionId;
-      const layout = document.querySelector(".layout");
       if (layout) {
         layout.classList.toggle("mobile-list-open", mobile && !hasSelection);
         layout.classList.toggle("mobile-viewer-open", mobile && hasSelection);
       }
+      if (mobile) {
+        stopListResize(false);
+      }
+      if (listResizeHandle) {
+        listResizeHandle.hidden = mobile;
+      }
+      updateListResizeHandle();
       viewerBackBtn.hidden = !mobile || !hasSelection;
     }
 
@@ -973,6 +1252,9 @@ export function renderViewerHtml(): string {
 
     function setSelectedSession(sessionId, options = {}) {
       state.selectedSessionId = sessionId || "";
+      if (state.selectedSessionId) {
+        clearSessionUnread(state.selectedSessionId);
+      }
       syncSessionUrl(state.selectedSessionId, options.historyMode || "none");
       updateResponsiveLayout();
       focusActiveMobilePane();
@@ -987,7 +1269,7 @@ export function renderViewerHtml(): string {
       if (message.type === "system" && message.subtype === "session_created") {
         if (message.projectPath) {
           projectPathInput.value = message.projectPath;
-          rememberProjectPath(message.projectPath);
+          saveState();
           syncProjectPathPicker();
         }
         if (typeof message.model === "string") {
@@ -1005,26 +1287,24 @@ export function renderViewerHtml(): string {
       }
 
       if (message.type === "session_list") {
-        if (Array.isArray(message.projectPaths)) {
-          state.savedProjectPaths = message.projectPaths
-            .filter((entry) => typeof entry === "string")
-            .map((entry) => entry.trim())
-            .filter(Boolean)
-            .filter((entry, index, array) => array.indexOf(entry) === index)
-            .slice(0, 12);
+        state.sessions = Array.isArray(message.sessions) ? message.sessions : [];
+        state.sharedProjectPaths = normalizeProjectPaths(message.projectPaths);
+        pruneUnreadSessions();
+        renderProjectPathOptions();
+        renderSessionRepoOptions();
+        const recentConversationProjectPaths = projectPathChoices();
+        if (
+          !state.hydratedProjectPaths
+          && recentConversationProjectPaths.length > 0
+          && (!projectPathInput.value || projectPathInput.value === "/workspace/mserver")
+        ) {
+          projectPathInput.value = recentConversationProjectPaths[0];
+          saveState();
           renderProjectPathOptions();
-          if (
-            !state.hydratedProjectPaths
-            && state.savedProjectPaths.length > 0
-            && (!projectPathInput.value || projectPathInput.value === "/workspace/mserver")
-          ) {
-            projectPathInput.value = state.savedProjectPaths[0];
-            saveState();
-            renderProjectPathOptions();
-          }
+        }
+        if (recentConversationProjectPaths.length > 0) {
           state.hydratedProjectPaths = true;
         }
-        state.sessions = Array.isArray(message.sessions) ? message.sessions : [];
         if (
           state.selectedSessionId
           && !state.sessions.some((session) => session.sessionId === state.selectedSessionId)
@@ -1041,6 +1321,10 @@ export function renderViewerHtml(): string {
         state.histories.set(message.sessionId, Array.isArray(message.messages) ? message.messages : []);
         reconcileQueuedDrafts(message.sessionId);
         if (message.sessionId === state.selectedSessionId) {
+          clearSessionUnread(message.sessionId);
+        }
+        renderSessionList();
+        if (message.sessionId === state.selectedSessionId) {
           renderMessages();
           renderQueuedDrafts();
         }
@@ -1052,6 +1336,12 @@ export function renderViewerHtml(): string {
         if (message.type === "user") {
           shiftQueuedDraft(message.sessionId, message.text || "");
         }
+        if (message.sessionId !== state.selectedSessionId) {
+          markSessionUnread(message.sessionId);
+        } else {
+          clearSessionUnread(message.sessionId);
+        }
+        renderSessionList();
         if (message.sessionId === state.selectedSessionId) {
           renderMessages();
           renderQueuedDrafts();
@@ -1100,6 +1390,29 @@ export function renderViewerHtml(): string {
       });
     }
 
+    function pruneUnreadSessions() {
+      const currentIds = new Set(state.sessions.map((session) => session.sessionId));
+      Array.from(state.unreadSessionIds).forEach((sessionId) => {
+        if (!currentIds.has(sessionId)) {
+          state.unreadSessionIds.delete(sessionId);
+        }
+      });
+    }
+
+    function markSessionUnread(sessionId) {
+      if (!sessionId || sessionId === state.selectedSessionId) {
+        return;
+      }
+      state.unreadSessionIds.add(sessionId);
+    }
+
+    function clearSessionUnread(sessionId) {
+      if (!sessionId) {
+        return;
+      }
+      state.unreadSessionIds.delete(sessionId);
+    }
+
     function enqueueDraft(sessionId, text) {
       const queue = state.queuedDrafts.get(sessionId) || [];
       queue.push(text);
@@ -1131,8 +1444,8 @@ export function renderViewerHtml(): string {
 
     function renderSessionList() {
       sessionsList.replaceChildren();
-      const filterQuery = normalizedSessionFilter();
-      const filteredSessions = state.sessions.filter((session) => matchesSessionFilter(session, filterQuery));
+      const filters = currentSessionFilters();
+      const filteredSessions = state.sessions.filter((session) => matchesSessionFilter(session, filters));
       state.sessionListOffset = clampSessionListOffset(state.sessionListOffset, filteredSessions.length);
       const visibleSessions = filteredSessions.slice(
         state.sessionListOffset,
@@ -1166,6 +1479,9 @@ export function renderViewerHtml(): string {
         }
         if (session.completed) {
           button.classList.add("completed");
+        }
+        if (isSessionUnread(session)) {
+          button.dataset.unread = "true";
         }
 
         const titleRow = document.createElement("div");
@@ -1212,16 +1528,78 @@ export function renderViewerHtml(): string {
       return String(sessionFilterInput.value || "").trim().toLowerCase();
     }
 
-    function matchesSessionFilter(session, query) {
-      if (!query) {
-        return true;
+    function currentSessionFilters() {
+      return {
+        query: normalizedSessionFilter(),
+        repo: String(sessionRepoFilter.value || "").trim().toLowerCase(),
+        unreadOnly: unreadOnlyFilter.checked,
+        settledOnly: settledOnlyFilter.checked,
+        showCompleted: showCompletedFilter.checked,
+      };
+    }
+
+    function isSessionUnread(session) {
+      return !!session && state.unreadSessionIds.has(session.sessionId);
+    }
+
+    function isSessionSettled(session) {
+      return session && session.answerState === "final_answer";
+    }
+
+    function matchesSessionFilter(session, filters) {
+      if (filters.query) {
+        const haystacks = [
+          session.title,
+          session.projectPath,
+          session.preview,
+        ].map((value) => String(value || "").toLowerCase());
+        if (!haystacks.some((value) => value.includes(filters.query))) {
+          return false;
+        }
       }
-      const haystacks = [
-        session.title,
-        session.projectPath,
-        session.preview,
-      ].map((value) => String(value || "").toLowerCase());
-      return haystacks.some((value) => value.includes(query));
+
+      if (filters.repo && shortProject(session.projectPath).toLowerCase() !== filters.repo) {
+        return false;
+      }
+
+      if (filters.unreadOnly && !isSessionUnread(session)) {
+        return false;
+      }
+
+      if (filters.settledOnly && !isSessionSettled(session)) {
+        return false;
+      }
+
+      if (!filters.showCompleted && session.completed === true) {
+        return false;
+      }
+
+      return true;
+    }
+
+    function renderSessionRepoOptions() {
+      const currentValue = String(sessionRepoFilter.value || "").trim().toLowerCase();
+      const repos = Array.from(new Set(
+        state.sessions
+          .map((session) => shortProject(session.projectPath))
+          .filter(Boolean)
+          .map((repo) => repo.toLowerCase()),
+      )).sort();
+
+      sessionRepoFilter.replaceChildren();
+      const allOption = document.createElement("option");
+      allOption.value = "";
+      allOption.textContent = "All repositories";
+      sessionRepoFilter.appendChild(allOption);
+
+      repos.forEach((repo) => {
+        const option = document.createElement("option");
+        option.value = repo;
+        option.textContent = repo;
+        sessionRepoFilter.appendChild(option);
+      });
+
+      sessionRepoFilter.value = repos.includes(currentValue) ? currentValue : "";
     }
 
     function clampSessionListOffset(offset, filteredCount) {
@@ -1456,8 +1834,11 @@ export function renderViewerHtml(): string {
     function renderQueuedDrafts() {
       const session = currentSession();
       const queued = session ? (state.queuedDrafts.get(session.sessionId) || []) : [];
+      const queueLength = session
+        ? Math.max(Number(session.queueLength) || 0, queued.length)
+        : 0;
       queuedList.replaceChildren();
-      if (!session || queued.length === 0 || !isSessionQueueing(session)) {
+      if (!session || queueLength === 0) {
         queuedPanel.hidden = true;
         return;
       }
@@ -1467,10 +1848,16 @@ export function renderViewerHtml(): string {
         item.textContent = text;
         queuedList.appendChild(item);
       });
+      const hiddenCount = Math.max(0, queueLength - queued.length);
+      if (hiddenCount > 0) {
+        const item = document.createElement("li");
+        item.textContent = formatQueuedPromptCount(hiddenCount, queued.length > 0);
+        queuedList.appendChild(item);
+      }
     }
 
-    function isSessionQueueing(session) {
-      return session.status === "running" || session.status === "waiting_approval";
+    function formatQueuedPromptCount(count, more) {
+      return count + " " + (more ? "more " : "") + (count === 1 ? "queued prompt" : "queued prompts");
     }
 
     function updateComposerState() {
@@ -1514,6 +1901,7 @@ export function renderViewerHtml(): string {
       const blocks = buildConversationBlocks(entries);
       const rendered = blocks.slice().reverse().map(renderConversationBlock);
       messages.replaceChildren(...rendered);
+      syncExpandableFinalAnswerCards();
     }
 
     function buildDisplayEntries(history) {
@@ -1577,6 +1965,7 @@ export function renderViewerHtml(): string {
           entries.push({
             role: "assistant",
             phase: item.message.phase || null,
+            id: item.message.id || "",
             text,
             timestamp: item.timestamp,
           });
@@ -1694,7 +2083,8 @@ export function renderViewerHtml(): string {
 
     function renderMessageCard(item) {
       const card = document.createElement("article");
-      const kind = item.role === "assistant" && item.phase === "final_answer"
+      const isFinalAnswer = item.role === "assistant" && item.phase === "final_answer";
+      const kind = isFinalAnswer
         ? "final"
         : item.role === "assistant" || item.role === "thinking" || item.role === "draft"
           ? "commentary"
@@ -1714,9 +2104,109 @@ export function renderViewerHtml(): string {
       card.appendChild(header);
 
       const body = document.createElement("div");
+      body.className = "message-body";
       body.textContent = item.text || "";
       card.appendChild(body);
+
+      if (isFinalAnswer) {
+        card.dataset.finalAnswerKey = finalAnswerEntryKey(item);
+        card.dataset.expanded = "false";
+        const footer = document.createElement("div");
+        footer.className = "message-card-footer";
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "message-expand-toggle";
+        toggle.hidden = true;
+        toggle.textContent = "Show more";
+        toggle.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleFinalAnswerCard(card);
+        });
+        footer.appendChild(toggle);
+        card.appendChild(footer);
+      }
       return card;
+    }
+
+    function finalAnswerEntryKey(item) {
+      return item.id || [item.phase || "", item.timestamp || "", item.text || ""].join("|");
+    }
+
+    function toggleFinalAnswerCard(card) {
+      if (!card || card.dataset.expandable !== "true") {
+        return;
+      }
+      const key = card.dataset.finalAnswerKey || "";
+      const expanded = card.dataset.expanded === "true";
+      if (expanded) {
+        state.expandedFinalAnswerKeys.delete(key);
+      } else if (key) {
+        state.expandedFinalAnswerKeys.add(key);
+      }
+      syncExpandableFinalAnswerCard(card);
+    }
+
+    function syncExpandableFinalAnswerCards() {
+      Array.from(messages.querySelectorAll(".message-card.final[data-final-answer-key]")).forEach((card) => {
+        syncExpandableFinalAnswerCard(card);
+      });
+    }
+
+    function syncExpandableFinalAnswerCard(card) {
+      const body = card.querySelector(".message-body");
+      const toggle = card.querySelector(".message-expand-toggle");
+      if (!body || !toggle) {
+        return;
+      }
+      const expandable = isFinalAnswerExpandable(body);
+      card.dataset.expandable = expandable ? "true" : "false";
+      if (!expandable) {
+        card.classList.remove("expandable");
+        card.dataset.expanded = "false";
+        toggle.hidden = true;
+        toggle.textContent = "Show more";
+        toggle.setAttribute("aria-expanded", "false");
+        return;
+      }
+      card.classList.add("expandable");
+      const key = card.dataset.finalAnswerKey || "";
+      const expanded = key ? state.expandedFinalAnswerKeys.has(key) : false;
+      card.dataset.expanded = expanded ? "true" : "false";
+      toggle.hidden = false;
+      toggle.textContent = expanded ? "Show less" : "Show more";
+      toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    }
+
+    function isFinalAnswerExpandable(body) {
+      const text = String(body.textContent || "");
+      if (!text.trim()) {
+        return false;
+      }
+      const computed = typeof window.getComputedStyle === "function" ? window.getComputedStyle(body) : null;
+      const lineHeight = computed ? parseFloat(computed.lineHeight || "") : NaN;
+      const scrollHeight = Number(body.scrollHeight);
+      if (Number.isFinite(scrollHeight) && scrollHeight > 0 && Number.isFinite(lineHeight) && lineHeight > 0) {
+        return scrollHeight > (lineHeight * FINAL_ANSWER_PREVIEW_LINES) + 1;
+      }
+      return estimateRenderedLineCount(text, body) > FINAL_ANSWER_PREVIEW_LINES;
+    }
+
+    function estimateRenderedLineCount(text, body) {
+      const charsPerLine = approximateCharsPerLine(body);
+      return String(text || "").split(/\\r?\\n/).reduce((total, line) => {
+        return total + Math.max(1, Math.ceil(line.length / charsPerLine));
+      }, 0);
+    }
+
+    function approximateCharsPerLine(body) {
+      const width = typeof body.getBoundingClientRect === "function"
+        ? body.getBoundingClientRect().width
+        : 0;
+      if (Number.isFinite(width) && width > 0) {
+        return Math.max(24, Math.floor(width / 8));
+      }
+      return 72;
     }
 
     function formatElapsedDuration(start, end) {
@@ -1787,7 +2277,7 @@ export function renderViewerHtml(): string {
     });
 
     startBtn.addEventListener("click", () => {
-      rememberProjectPath(projectPathInput.value);
+      saveState();
       send({
         type: "start",
         projectPath: projectPathInput.value,
@@ -1825,6 +2315,42 @@ export function renderViewerHtml(): string {
       setSelectedSession("", { historyMode: "push", requestHistory: false });
     });
 
+    if (listResizeHandle) {
+      listResizeHandle.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        startListResize(event.clientX);
+      });
+      listResizeHandle.addEventListener("keydown", (event) => {
+        if (isMobileViewport()) {
+          return;
+        }
+        const bounds = listPanelWidthBounds();
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          applyListPanelWidth(currentListPanelWidth() - (event.shiftKey ? 48 : 24));
+          saveState();
+          return;
+        }
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          applyListPanelWidth(currentListPanelWidth() + (event.shiftKey ? 48 : 24));
+          saveState();
+          return;
+        }
+        if (event.key === "Home") {
+          event.preventDefault();
+          applyListPanelWidth(bounds.min);
+          saveState();
+          return;
+        }
+        if (event.key === "End") {
+          event.preventDefault();
+          applyListPanelWidth(bounds.max);
+          saveState();
+        }
+      });
+    }
+
     sendBtn.addEventListener("click", () => {
       const session = currentSession();
       const text = composerInput.value.trim();
@@ -1855,12 +2381,16 @@ export function renderViewerHtml(): string {
     });
 
     const savedState = loadSavedState();
-    state.savedProjectPaths = Array.isArray(savedState.projectPaths) ? savedState.projectPaths : [];
-    projectPathInput.value = savedState.projectPath || state.savedProjectPaths[0] || "/workspace/mserver";
+    projectPathInput.value = savedState.projectPath || "/workspace/mserver";
     renderProjectPathOptions();
     modelInput.value = "gpt-5.4";
     modelReasoningEffortSelect.value = "xhigh";
     bridgeUrlInput.value = defaultSocketUrl();
+    if (savedState.listPanelWidth !== null) {
+      applyListPanelWidth(savedState.listPanelWidth);
+    } else {
+      updateListResizeHandle();
+    }
     projectPathPicker.addEventListener("change", () => {
       if (!projectPathPicker.value) {
         return;
@@ -1880,6 +2410,22 @@ export function renderViewerHtml(): string {
       state.sessionListOffset = 0;
       renderSessionList();
     });
+    sessionRepoFilter.addEventListener("change", () => {
+      state.sessionListOffset = 0;
+      renderSessionList();
+    });
+    unreadOnlyFilter.addEventListener("change", () => {
+      state.sessionListOffset = 0;
+      renderSessionList();
+    });
+    settledOnlyFilter.addEventListener("change", () => {
+      state.sessionListOffset = 0;
+      renderSessionList();
+    });
+    showCompletedFilter.addEventListener("change", () => {
+      state.sessionListOffset = 0;
+      renderSessionList();
+    });
     sessionListPrevBtn.addEventListener("click", () => {
       state.sessionListOffset = Math.max(0, state.sessionListOffset - MAX_VISIBLE_SESSIONS);
       renderSessionList();
@@ -1896,6 +2442,12 @@ export function renderViewerHtml(): string {
     });
     window.addEventListener("resize", () => {
       updateResponsiveLayout();
+      if (state.listPanelWidth !== null) {
+        applyListPanelWidth(state.listPanelWidth);
+      } else {
+        updateListResizeHandle();
+      }
+      syncExpandableFinalAnswerCards();
     });
     ensureSocket();
     setSelectedSession(currentUrlSessionId(), { historyMode: "replace", requestHistory: false });

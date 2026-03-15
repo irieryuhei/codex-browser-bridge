@@ -97,6 +97,21 @@ describe("startBridgeServer", () => {
     expect(html).not.toContain("ccpocket-style layout");
   });
 
+  it("serves the viewer shell when the root URL includes a session query", async () => {
+    const server = await startBridgeServer({
+      port: 0,
+      codexSessionRoot: null,
+      codexFactory: { startSession: async () => new FakeCodexSession() },
+    });
+    servers.push(server);
+
+    const response = await fetch(`http://127.0.0.1:${server.port}/?session=thread_reload`);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain('id="sessionsList"');
+  });
+
   it("starts sessions with model, effort, and plan mode, then exposes them in the session list", async () => {
     const calls: Array<Record<string, unknown>> = [];
     const codexSession = new FakeCodexSession("thread_plan");

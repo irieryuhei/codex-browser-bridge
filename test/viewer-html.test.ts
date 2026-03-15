@@ -21,7 +21,7 @@ describe("renderViewerHtml", () => {
     expect((viewer.panel("advancedControls") as HTMLDetailsElement).open).toBe(false);
     expect(viewer.select("projectPathPicker").hidden).toBe(false);
     expect(viewer.projectPathChoices()).toEqual([
-      { value: "/workspace/mserver", label: "mserver" },
+      { value: "", label: "Select a repository" },
     ]);
     expect(viewer.input("modelInput").value).toBe("gpt-5.4");
     expect(viewer.select("modelReasoningEffort").value).toBe("xhigh");
@@ -71,7 +71,49 @@ describe("renderViewerHtml", () => {
     ]);
   });
 
-  it("hydrates recent project paths from the bridge so another browser sees the same choices", () => {
+  it("prioritizes project path choices from the ten most recent conversations and appends shared candidates", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      projectPaths: ["/workspace/ignored"],
+      sessions: Array.from({ length: 12 }, (_, index) => ({
+        sessionId: `sess_${index + 1}`,
+        title: `Session ${index + 1}`,
+        projectPath: index < 10 ? `/workspace/repo-${index + 1}` : `/workspace/extra-${index - 9}`,
+        status: "idle",
+        answerState: "final_answer",
+        updatedAt: `2026-03-15T00:00:${String(index).padStart(2, "0")}.000Z`,
+        model: "",
+        modelReasoningEffort: "",
+        permissionMode: "default",
+        pinned: false,
+        completed: false,
+        preview: "",
+        queueLength: 0,
+      })),
+    });
+
+    expect(viewer.input("projectPath").value).toBe("/workspace/repo-1");
+    expect(viewer.projectPathChoices()).toEqual([
+      { value: "", label: "Select a repository" },
+      { value: "/workspace/repo-1", label: "repo-1" },
+      { value: "/workspace/repo-2", label: "repo-2" },
+      { value: "/workspace/repo-3", label: "repo-3" },
+      { value: "/workspace/repo-4", label: "repo-4" },
+      { value: "/workspace/repo-5", label: "repo-5" },
+      { value: "/workspace/repo-6", label: "repo-6" },
+      { value: "/workspace/repo-7", label: "repo-7" },
+      { value: "/workspace/repo-8", label: "repo-8" },
+      { value: "/workspace/repo-9", label: "repo-9" },
+      { value: "/workspace/repo-10", label: "repo-10" },
+      { value: "/workspace/ignored", label: "ignored" },
+    ]);
+  });
+
+  it("hydrates shared project path choices from the bridge when no conversation list is available yet", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
 
@@ -84,20 +126,51 @@ describe("renderViewerHtml", () => {
 
     expect(viewer.input("projectPath").value).toBe("/workspace/alpha");
     expect(viewer.projectPathChoices()).toEqual([
+      { value: "", label: "Select a repository" },
       { value: "/workspace/alpha", label: "alpha" },
       { value: "/workspace/beta", label: "beta" },
     ]);
   });
 
-  it("fills the project path input with the full path when a remembered repository is chosen", () => {
+  it("fills the project path input with the full path when a conversation repository is chosen", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
 
     socket.open();
     socket.receive({
       type: "session_list",
-      projectPaths: ["/workspace/alpha", "/workspace/beta"],
-      sessions: [],
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Alpha",
+          projectPath: "/workspace/alpha",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+        {
+          sessionId: "sess_b",
+          title: "Beta",
+          projectPath: "/workspace/beta",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:04.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+      ],
     });
 
     viewer.select("projectPathPicker").value = "/workspace/beta";
@@ -106,7 +179,7 @@ describe("renderViewerHtml", () => {
     expect(viewer.input("projectPath").value).toBe("/workspace/beta");
   });
 
-  it("deduplicates remembered project paths loaded from localStorage", () => {
+  it("ignores saved project path candidates until conversations are listed", () => {
     const viewer = bootViewer({
       savedStorage: {
         "codex-browser-bridge.viewer": JSON.stringify({
@@ -116,23 +189,52 @@ describe("renderViewerHtml", () => {
       },
     });
 
-    expect(viewer.projectPathChoices()).toEqual([
-      { value: "/workspace/alpha", label: "alpha" },
-      { value: "/workspace/beta", label: "beta" },
-    ]);
+    expect(viewer.projectPathChoices()).toEqual([{ value: "", label: "Select a repository" }]);
   });
 
-  it("shows full paths when remembered repositories share the same basename", () => {
-    const viewer = bootViewer({
-      savedStorage: {
-        "codex-browser-bridge.viewer": JSON.stringify({
+  it("shows full paths when recent conversation repositories share the same basename", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "App A",
           projectPath: "/workspace/team-a/app",
-          projectPaths: ["/workspace/team-a/app", "/workspace/team-b/app"],
-        }),
-      },
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+        {
+          sessionId: "sess_b",
+          title: "App B",
+          projectPath: "/workspace/team-b/app",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:04.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+      ],
     });
 
     expect(viewer.projectPathChoices()).toEqual([
+      { value: "", label: "Select a repository" },
       { value: "/workspace/team-a/app", label: "/workspace/team-a/app" },
       { value: "/workspace/team-b/app", label: "/workspace/team-b/app" },
     ]);
@@ -169,6 +271,43 @@ describe("renderViewerHtml", () => {
     expect(viewer.locationSearch()).toBe("?session=sess_a");
   });
 
+  it("allows resizing the conversation list and persists the custom width", () => {
+    const viewer = bootViewer();
+
+    expect(viewer.panel("listResizeHandle").hidden).toBe(false);
+
+    viewer.panel("listResizeHandle").dispatchEvent(new viewer.window.MouseEvent("mousedown", {
+      bubbles: true,
+      clientX: 380,
+    }));
+    viewer.window.dispatchEvent(new viewer.window.MouseEvent("mousemove", {
+      bubbles: true,
+      clientX: 500,
+    }));
+    viewer.window.dispatchEvent(new viewer.window.MouseEvent("mouseup", {
+      bubbles: true,
+    }));
+
+    expect(viewer.layoutStyle("--list-panel-width")).toBe("500px");
+    expect(JSON.parse(viewer.snapshotStorage()["codex-browser-bridge.viewer"])).toMatchObject({
+      projectPath: "/workspace/mserver",
+      listPanelWidth: 500,
+    });
+  });
+
+  it("restores a saved conversation list width", () => {
+    const viewer = bootViewer({
+      savedStorage: {
+        "codex-browser-bridge.viewer": JSON.stringify({
+          projectPath: "/workspace/alpha",
+          listPanelWidth: 540,
+        }),
+      },
+    });
+
+    expect(viewer.layoutStyle("--list-panel-width")).toBe("540px");
+  });
+
   it("shows one pane at a time on mobile and returns to the list with the back button", () => {
     const viewer = bootViewer({ width: 430 });
     const socket = viewer.socketAt(0);
@@ -195,6 +334,7 @@ describe("renderViewerHtml", () => {
       ],
     });
 
+    expect(viewer.panel("listResizeHandle").hidden).toBe(true);
     expect(viewer.layoutClassName()).toContain("mobile-list-open");
 
     viewer.sessionButtons()[0]?.click();
@@ -419,6 +559,193 @@ describe("renderViewerHtml", () => {
     expect(viewer.text("sessionListSummary")).toBe("Showing 2 of 12 conversations");
   });
 
+  it("filters conversations with an explicit repository selector", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Alpha 1",
+          projectPath: "/workspace/alpha",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "First alpha",
+          queueLength: 0,
+        },
+        {
+          sessionId: "sess_b",
+          title: "Beta",
+          projectPath: "/workspace/beta",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:04.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "Only beta",
+          queueLength: 0,
+        },
+        {
+          sessionId: "sess_c",
+          title: "Alpha 2",
+          projectPath: "/tmp/alpha",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:03.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "Second alpha",
+          queueLength: 0,
+        },
+      ],
+    });
+
+    const repoOptions = Array.from(viewer.select("sessionRepoFilter").options).map((option) => ({
+      value: option.value,
+      label: option.textContent ?? "",
+    }));
+    expect(repoOptions).toEqual([
+      { value: "", label: "All repositories" },
+      { value: "alpha", label: "alpha" },
+      { value: "beta", label: "beta" },
+    ]);
+
+    viewer.select("sessionRepoFilter").value = "alpha";
+    viewer.select("sessionRepoFilter").dispatchEvent(new viewer.document.defaultView!.Event("change"));
+
+    expect(viewer.sessionButtons().map((button: HTMLButtonElement) => button.dataset.sessionId)).toEqual([
+      "sess_a",
+      "sess_c",
+    ]);
+    expect(viewer.text("sessionListSummary")).toBe("Showing 2 of 3 conversations");
+  });
+
+  it("filters conversations by unread, settled, and completed toggles", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Viewed settled",
+          projectPath: "/workspace/a",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "A preview",
+          queueLength: 0,
+        },
+        {
+          sessionId: "sess_b",
+          title: "Running session",
+          projectPath: "/workspace/b",
+          status: "running",
+          answerState: "commentary",
+          updatedAt: "2026-03-15T00:00:04.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "B preview",
+          queueLength: 0,
+        },
+        {
+          sessionId: "sess_c",
+          title: "Completed settled",
+          projectPath: "/workspace/c",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:03.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: true,
+          preview: "C preview",
+          queueLength: 0,
+        },
+        {
+          sessionId: "sess_d",
+          title: "Unread settled",
+          projectPath: "/workspace/d",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:02.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "D preview",
+          queueLength: 0,
+        },
+      ],
+    });
+
+    viewer.sessionButtons()[0]?.click();
+    socket.receive({ type: "history", sessionId: "sess_a", messages: [] });
+
+    socket.receive({
+      type: "assistant",
+      sessionId: "sess_d",
+      timestamp: "2026-03-15T00:00:06.000Z",
+      message: {
+        id: "msg_d",
+        role: "assistant",
+        model: "gpt-5.4",
+        phase: "final_answer",
+        content: [{ type: "text", text: "Unread reply" }],
+      },
+    });
+
+    viewer.input("unreadOnlyFilter").checked = true;
+    viewer.input("unreadOnlyFilter").dispatchEvent(new viewer.document.defaultView!.Event("change"));
+    expect(viewer.sessionButtons().map((button: HTMLButtonElement) => button.dataset.sessionId)).toEqual([
+      "sess_d",
+    ]);
+
+    viewer.input("unreadOnlyFilter").checked = false;
+    viewer.input("unreadOnlyFilter").dispatchEvent(new viewer.document.defaultView!.Event("change"));
+    viewer.input("settledOnlyFilter").checked = true;
+    viewer.input("settledOnlyFilter").dispatchEvent(new viewer.document.defaultView!.Event("change"));
+    expect(viewer.sessionButtons().map((button: HTMLButtonElement) => button.dataset.sessionId)).toEqual([
+      "sess_a",
+      "sess_c",
+      "sess_d",
+    ]);
+
+    viewer.input("showCompletedFilter").checked = false;
+    viewer.input("showCompletedFilter").dispatchEvent(new viewer.document.defaultView!.Event("change"));
+    expect(viewer.sessionButtons().map((button: HTMLButtonElement) => button.dataset.sessionId)).toEqual([
+      "sess_a",
+      "sess_d",
+    ]);
+  });
+
   it("pages the conversation list with previous and next buttons", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
@@ -537,7 +864,7 @@ describe("renderViewerHtml", () => {
     expect(viewer.sessionSpinners()).toEqual([]);
   });
 
-  it("keeps queued prompts hidden when there is no actual queued message text", () => {
+  it("shows queued prompt counts even when this browser does not know the queued text", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
 
@@ -565,8 +892,8 @@ describe("renderViewerHtml", () => {
     viewer.sessionButtons()[0]?.click();
     socket.receive({ type: "history", sessionId: "sess_a", messages: [] });
 
-    expect(viewer.panel("queuedPanel").hidden).toBe(true);
-    expect(viewer.queuedItems()).toEqual([]);
+    expect(viewer.panel("queuedPanel").hidden).toBe(false);
+    expect(viewer.queuedItems()).toEqual(["2 queued prompts"]);
   });
 
   it("shows newest messages first and collapses intermediate turn messages after the final answer", () => {
@@ -634,6 +961,123 @@ describe("renderViewerHtml", () => {
     expect(cards[1]?.textContent).toContain("途中の会話");
     expect(cards[1]?.textContent).toContain("6s");
     expect(cards[2]?.textContent).toContain("Please inspect the repo");
+  });
+
+  it("clamps long final answers by default and expands them on demand", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Session A",
+          projectPath: "/workspace/a",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "gpt-5.4",
+          modelReasoningEffort: "xhigh",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+      ],
+    });
+    viewer.sessionButtons()[0]?.click();
+
+    socket.receive({
+      type: "history",
+      sessionId: "sess_a",
+      messages: [
+        {
+          type: "assistant",
+          sessionId: "sess_a",
+          timestamp: "2026-03-15T00:00:06.000Z",
+          message: {
+            id: "msg_1",
+            role: "assistant",
+            model: "gpt-5.4",
+            phase: "final_answer",
+            content: [{
+              type: "text",
+              text: "line 1\nline 2\nline 3\nline 4\nline 5\nline 6",
+            }],
+          },
+        },
+      ],
+    });
+
+    const finalCard = viewer.messageBlocks()[0] as HTMLElement;
+    const toggle = finalCard.querySelector(".message-expand-toggle") as HTMLButtonElement;
+
+    expect(finalCard.dataset.expandable).toBe("true");
+    expect(finalCard.dataset.expanded).toBe("false");
+    expect(toggle.hidden).toBe(false);
+    expect(toggle.textContent).toBe("Show more");
+
+    toggle.click();
+
+    expect(finalCard.dataset.expanded).toBe("true");
+    expect(toggle.textContent).toBe("Show less");
+  });
+
+  it("keeps short final answers fully visible without an expand control", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Session A",
+          projectPath: "/workspace/a",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "gpt-5.4",
+          modelReasoningEffort: "xhigh",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+      ],
+    });
+    viewer.sessionButtons()[0]?.click();
+
+    socket.receive({
+      type: "history",
+      sessionId: "sess_a",
+      messages: [
+        {
+          type: "assistant",
+          sessionId: "sess_a",
+          timestamp: "2026-03-15T00:00:06.000Z",
+          message: {
+            id: "msg_1",
+            role: "assistant",
+            model: "gpt-5.4",
+            phase: "final_answer",
+            content: [{ type: "text", text: "All good." }],
+          },
+        },
+      ],
+    });
+
+    const finalCard = viewer.messageBlocks()[0] as HTMLElement;
+    const toggle = finalCard.querySelector(".message-expand-toggle") as HTMLButtonElement;
+
+    expect(finalCard.dataset.expandable).toBe("false");
+    expect(finalCard.dataset.expanded).toBe("false");
+    expect(toggle.hidden).toBe(true);
   });
 
   it("keeps tool messages out of the conversation view", () => {
@@ -968,6 +1412,9 @@ function bootViewer(options: { savedStorage?: Record<string, string>; url?: stri
     },
     layoutClassName() {
       return dom.window.document.querySelector(".layout")?.className ?? "";
+    },
+    layoutStyle(property: string) {
+      return (dom.window.document.querySelector(".layout") as HTMLElement | null)?.style.getPropertyValue(property) ?? "";
     },
     locationSearch() {
       return dom.window.location.search;
