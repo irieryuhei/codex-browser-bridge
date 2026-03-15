@@ -122,6 +122,22 @@ describe("renderViewerHtml", () => {
     ]);
   });
 
+  it("shows full paths when remembered repositories share the same basename", () => {
+    const viewer = bootViewer({
+      savedStorage: {
+        "codex-browser-bridge.viewer": JSON.stringify({
+          projectPath: "/workspace/team-a/app",
+          projectPaths: ["/workspace/team-a/app", "/workspace/team-b/app"],
+        }),
+      },
+    });
+
+    expect(viewer.projectPathChoices()).toEqual([
+      { value: "/workspace/team-a/app", label: "/workspace/team-a/app" },
+      { value: "/workspace/team-b/app", label: "/workspace/team-b/app" },
+    ]);
+  });
+
   it("updates the URL when a conversation is selected", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
@@ -299,6 +315,68 @@ describe("renderViewerHtml", () => {
       { type: "set_session_pin", sessionId: "sess_a", pinned: false },
       { type: "set_session_completion", sessionId: "sess_a", completed: true },
     ]);
+  });
+
+  it("colors conversation rows consistently by repository", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Alpha 1",
+          projectPath: "/workspace/alpha",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "First alpha",
+          queueLength: 0,
+        },
+        {
+          sessionId: "sess_b",
+          title: "Alpha 2",
+          projectPath: "/tmp/alpha",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:04.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "Second alpha",
+          queueLength: 0,
+        },
+        {
+          sessionId: "sess_c",
+          title: "Beta",
+          projectPath: "/workspace/beta",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:03.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "Beta preview",
+          queueLength: 0,
+        },
+      ],
+    });
+
+    const [alphaOne, alphaTwo, beta] = viewer.sessionButtons();
+    expect(alphaOne?.getAttribute("style")).toContain("--session-bg:");
+    expect(alphaOne?.getAttribute("style")).toBe(alphaTwo?.getAttribute("style"));
+    expect(alphaOne?.getAttribute("style")).not.toBe(beta?.getAttribute("style"));
   });
 
   it("limits the conversation list to ten rows and filters by title, repo, or preview", () => {
@@ -556,6 +634,91 @@ describe("renderViewerHtml", () => {
     expect(cards[1]?.textContent).toContain("途中の会話");
     expect(cards[1]?.textContent).toContain("6s");
     expect(cards[2]?.textContent).toContain("Please inspect the repo");
+  });
+
+  it("keeps tool messages out of the conversation view", () => {
+    const viewer = bootViewer();
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Session A",
+          projectPath: "/workspace/a",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "gpt-5.4",
+          modelReasoningEffort: "xhigh",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+      ],
+    });
+    viewer.sessionButtons()[0]?.click();
+
+    socket.receive({
+      type: "history",
+      sessionId: "sess_a",
+      messages: [
+        {
+          type: "user",
+          sessionId: "sess_a",
+          text: "Check status",
+          timestamp: "2026-03-15T00:00:00.000Z",
+        },
+        {
+          type: "assistant",
+          sessionId: "sess_a",
+          timestamp: "2026-03-15T00:00:01.000Z",
+          message: {
+            id: "tool_msg_1",
+            role: "assistant",
+            model: "gpt-5.4",
+            phase: "commentary",
+            content: [{
+              type: "tool_use",
+              id: "tool_1",
+              name: "Bash",
+              input: { command: "git status" },
+            }],
+          },
+        },
+        {
+          type: "tool_result",
+          sessionId: "sess_a",
+          toolUseId: "tool_1",
+          toolName: "Bash",
+          content: "On branch main",
+          timestamp: "2026-03-15T00:00:02.000Z",
+        },
+        {
+          type: "assistant",
+          sessionId: "sess_a",
+          timestamp: "2026-03-15T00:00:03.000Z",
+          message: {
+            id: "msg_1",
+            role: "assistant",
+            model: "gpt-5.4",
+            phase: "final_answer",
+            content: [{ type: "text", text: "Repository is clean." }],
+          },
+        },
+      ],
+    });
+
+    const cards = viewer.messageBlocks();
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.textContent).toContain("Repository is clean.");
+    expect(cards[1]?.textContent).toContain("Check status");
+    expect(cards[0]?.textContent).not.toContain("git status");
+    expect(cards[0]?.textContent).not.toContain("On branch main");
   });
 
   it("keeps queued prompts out of history until the bridge confirms the user turn", () => {

@@ -234,16 +234,26 @@ export function renderViewerHtml(): string {
       text-align: left;
       padding: 14px 16px;
       border-radius: 18px;
-      border: 1px solid var(--line);
-      background: rgba(255,255,255,0.72);
+      border: 1px solid var(--session-border, var(--line));
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.2), rgba(255,255,255,0)),
+        var(--session-bg, rgba(255,255,255,0.72));
       display: grid;
       gap: 6px;
     }
 
+    .session-button:hover {
+      border-color: var(--session-border-strong, rgba(15, 118, 110, 0.3));
+    }
+
     .session-button.active {
-      border-color: rgba(15, 118, 110, 0.34);
-      box-shadow: inset 0 0 0 1px rgba(15, 118, 110, 0.22);
-      background: linear-gradient(180deg, rgba(15,118,110,0.09), rgba(255,255,255,0.88));
+      border-color: var(--session-border-strong, rgba(15, 118, 110, 0.34));
+      box-shadow:
+        inset 0 0 0 1px var(--session-border-strong, rgba(15, 118, 110, 0.22)),
+        0 0 0 3px var(--session-ring, rgba(15, 118, 110, 0.14));
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.28), rgba(255,255,255,0.04)),
+        var(--session-bg, rgba(255,255,255,0.88));
     }
 
     .session-button.pinned::before {
@@ -791,6 +801,16 @@ export function renderViewerHtml(): string {
         projectPathInput.value,
         ...state.savedProjectPaths,
       ]);
+      const duplicateShortProjects = new Set();
+      const shortProjectCounts = new Map();
+      pickerPaths.forEach((projectPath) => {
+        const short = shortProject(projectPath) || projectPath;
+        const count = (shortProjectCounts.get(short) || 0) + 1;
+        shortProjectCounts.set(short, count);
+        if (count > 1) {
+          duplicateShortProjects.add(short);
+        }
+      });
       projectPathPicker.replaceChildren();
       if (pickerPaths.length === 0) {
         const placeholder = document.createElement("option");
@@ -804,7 +824,8 @@ export function renderViewerHtml(): string {
       pickerPaths.forEach((projectPath) => {
         const option = document.createElement("option");
         option.value = projectPath;
-        option.textContent = shortProject(projectPath) || projectPath;
+        const short = shortProject(projectPath) || projectPath;
+        option.textContent = duplicateShortProjects.has(short) ? projectPath : short;
         projectPathPicker.appendChild(option);
       });
       projectPathPicker.hidden = false;
@@ -1136,6 +1157,7 @@ export function renderViewerHtml(): string {
         button.type = "button";
         button.className = "session-button";
         button.dataset.sessionId = session.sessionId;
+        button.setAttribute("style", getSessionPalette(session));
         if (session.sessionId === state.selectedSessionId) {
           button.classList.add("active");
         }
@@ -1541,12 +1563,6 @@ export function renderViewerHtml(): string {
           const content = Array.isArray(item.message.content) ? item.message.content : [];
           const toolUse = content.find((entry) => entry && entry.type === "tool_use");
           if (toolUse) {
-            entries.push({
-              role: "tool",
-              text: toolUse.input && toolUse.input.command ? String(toolUse.input.command) : toolUse.name || "Tool",
-              toolUseId: toolUse.id || "",
-              timestamp: item.timestamp,
-            });
             return;
           }
 
@@ -1568,17 +1584,6 @@ export function renderViewerHtml(): string {
         }
 
         if (item.type === "tool_result") {
-          const last = entries[entries.length - 1];
-          if (last && last.role === "tool" && last.toolUseId === item.toolUseId) {
-            last.text = last.text && item.content ? last.text + "\\n\\n" + item.content : last.text || item.content || "";
-            return;
-          }
-          entries.push({
-            role: "tool",
-            text: item.content || "",
-            toolUseId: item.toolUseId || "",
-            timestamp: item.timestamp,
-          });
           return;
         }
 
@@ -1635,7 +1640,7 @@ export function renderViewerHtml(): string {
           return;
         }
 
-        const isTurnEntry = item.role === "thinking" || item.role === "draft" || item.role === "tool"
+        const isTurnEntry = item.role === "thinking" || item.role === "draft"
           || (item.role === "assistant");
 
         if (!isTurnEntry) {
@@ -1736,6 +1741,41 @@ export function renderViewerHtml(): string {
       }
       const parts = normalized.split("/");
       return parts[parts.length - 1] || normalized;
+    }
+
+    function hashString(value) {
+      let hash = 0;
+      const source = String(value || "");
+      for (let index = 0; index < source.length; index += 1) {
+        hash = ((hash << 5) - hash) + source.charCodeAt(index);
+        hash |= 0;
+      }
+      return Math.abs(hash);
+    }
+
+    function normalizeHue(hue) {
+      return ((hue % 360) + 360) % 360;
+    }
+
+    function getSessionPalette(session) {
+      const repo = shortProject(session && session.projectPath ? session.projectPath : "") || "unknown";
+      const normalizedRepo = repo.toLowerCase();
+      const repoSeed = hashString(normalizedRepo);
+      const repoHueAnchors = [8, 38, 120, 210, 275, 332];
+      const baseHue = normalizedRepo === "mserver"
+        ? 132
+        : repoHueAnchors[repoSeed % repoHueAnchors.length];
+      const hue = normalizeHue(baseHue + ((repoSeed % 5) - 2) * 6);
+      const saturation = 68 + (repoSeed % 10);
+      const backgroundLightness = 86 + ((repoSeed >>> 4) % 5);
+      const borderLightness = 54 + ((repoSeed >>> 6) % 8);
+
+      return [
+        "--session-bg: hsl(" + hue + " " + saturation + "% " + backgroundLightness + "% / 0.9)",
+        "--session-border: hsl(" + hue + " " + Math.max(saturation - 8, 58) + "% " + borderLightness + "% / 0.46)",
+        "--session-border-strong: hsl(" + hue + " " + Math.max(saturation + 4, 72) + "% " + Math.max(borderLightness - 8, 42) + "% / 0.8)",
+        "--session-ring: hsl(" + hue + " " + Math.max(saturation + 2, 70) + "% " + Math.max(borderLightness - 4, 46) + "% / 0.2)",
+      ].join("; ");
     }
 
     connectBtn.addEventListener("click", () => {
