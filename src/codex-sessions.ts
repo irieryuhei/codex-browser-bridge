@@ -56,6 +56,7 @@ interface ParseState {
   model: string;
   modelReasoningEffort: string;
   permissionMode: PermissionMode;
+  hasExplicitSessionId: boolean;
 }
 
 export function getDefaultCodexSessionRoot(override?: string): string {
@@ -307,6 +308,7 @@ async function parseCodexSessionSummaryFile(filePath: string): Promise<StoredCod
     model: "",
     modelReasoningEffort: "",
     permissionMode: "default",
+    hasExplicitSessionId: false,
   };
 
   raw.split("\n").forEach((line) => {
@@ -366,11 +368,12 @@ function applySummaryEntry(state: ParseState, entry: Record<string, unknown>): v
     if (!payload) {
       return;
     }
-    if (typeof payload.id === "string" && payload.id.trim()) {
+    if (!state.hasExplicitSessionId && typeof payload.id === "string" && payload.id.trim()) {
       state.threadId = payload.id;
+      state.hasExplicitSessionId = true;
     }
     if (typeof payload.cwd === "string" && payload.cwd.trim()) {
-      state.projectPath = payload.cwd;
+      state.projectPath ||= payload.cwd;
     }
     return;
   }

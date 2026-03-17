@@ -6,6 +6,7 @@ const doms: JSDOM[] = [];
 
 describe("renderViewerHtml", () => {
   afterEach(() => {
+    vi.useRealTimers();
     while (doms.length > 0) {
       doms.pop()?.window.close();
       FakeWebSocket.instances.length = 0;
@@ -298,6 +299,38 @@ describe("renderViewerHtml", () => {
     expect(viewer.locationSearch()).toBe("?session=sess_a");
   });
 
+  it("requests history for a session restored from the URL after reload", () => {
+    const viewer = bootViewer({ url: "http://127.0.0.1:8765/?session=sess_a", width: 430 });
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.clearSent();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Session A",
+          projectPath: "/workspace/a",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+      ],
+    });
+
+    expect(socket.sentJson()).toEqual([{ type: "get_history", sessionId: "sess_a" }]);
+    expect(viewer.layoutClassName()).toContain("mobile-viewer-open");
+    expect(viewer.text("viewerTitle")).toBe("Session A");
+  });
+
   it("allows resizing the conversation list and persists the custom width", () => {
     const viewer = bootViewer();
 
@@ -414,7 +447,9 @@ describe("renderViewerHtml", () => {
   });
 
   it("renders the session list, model badge, and pin or complete actions", () => {
-    const viewer = bootViewer();
+    vi.useFakeTimers();
+    let now = Date.parse("2026-03-15T00:00:10.000Z");
+    const viewer = bootViewer({ now: () => now });
     const socket = viewer.socketAt(0);
 
     socket.open();
@@ -456,8 +491,8 @@ describe("renderViewerHtml", () => {
 
     const buttons = viewer.sessionButtons();
     expect(buttons.map((button: HTMLButtonElement) => button.textContent?.replace(/\s+/g, " ").trim())).toEqual([
-      "Pinned session repo: a model: gpt-5.4 / effort: xhigh Ready",
-      "Completed session repo: b mode: plan Done",
+      "Pinned session repo: a 5 seconds ago model: gpt-5.4 / effort: xhigh Ready",
+      "Completed session repo: b 9 seconds ago mode: plan Done",
     ]);
     expect(buttons[0]?.className).toContain("pinned");
     expect(buttons[1]?.className).toContain("completed");
@@ -482,6 +517,42 @@ describe("renderViewerHtml", () => {
       { type: "set_session_pin", sessionId: "sess_a", pinned: false },
       { type: "set_session_completion", sessionId: "sess_a", completed: true },
     ]);
+  });
+
+  it("refreshes relative reply times in the conversation list over time", () => {
+    vi.useFakeTimers();
+    let now = Date.parse("2026-03-15T00:03:10.000Z");
+    const viewer = bootViewer({ now: () => now });
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Session A",
+          projectPath: "/workspace/a",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:10.000Z",
+          model: "",
+          modelReasoningEffort: "",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "Ready",
+          queueLength: 0,
+        },
+      ],
+    });
+
+    expect(viewer.sessionButtons()[0]?.textContent?.replace(/\s+/g, " ").trim()).toContain("3 minutes ago");
+
+    now = Date.parse("2026-03-15T00:04:10.000Z");
+    vi.advanceTimersByTime(1000);
+
+    expect(viewer.sessionButtons()[0]?.textContent?.replace(/\s+/g, " ").trim()).toContain("4 minutes ago");
   });
 
   it("colors conversation rows consistently by repository", () => {
@@ -892,7 +963,9 @@ describe("renderViewerHtml", () => {
   });
 
   it("shows newest messages first and collapses intermediate turn messages after the final answer", () => {
-    const viewer = bootViewer();
+    vi.useFakeTimers();
+    let now = Date.parse("2026-03-15T00:00:12.000Z");
+    const viewer = bootViewer({ now: () => now });
     const socket = viewer.socketAt(0);
 
     socket.open();
@@ -952,10 +1025,68 @@ describe("renderViewerHtml", () => {
 
     const cards = viewer.messageBlocks();
     expect(cards[0]?.textContent).toContain("All good.");
+    expect(cards[0]?.textContent).toContain("6 seconds ago");
     expect(cards[1]?.tagName).toBe("DETAILS");
     expect(cards[1]?.textContent).toContain("途中の会話");
     expect(cards[1]?.textContent).toContain("6s");
     expect(cards[2]?.textContent).toContain("Please inspect the repo");
+    expect(cards[2]?.textContent).toContain("12 seconds ago");
+  });
+
+  it("refreshes relative reply times in the conversation detail over time", () => {
+    vi.useFakeTimers();
+    let now = Date.parse("2026-03-15T00:00:12.000Z");
+    const viewer = bootViewer({ now: () => now });
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Session A",
+          projectPath: "/workspace/a",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "gpt-5.4",
+          modelReasoningEffort: "xhigh",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+      ],
+    });
+    viewer.sessionButtons()[0]?.click();
+
+    socket.receive({
+      type: "history",
+      sessionId: "sess_a",
+      messages: [
+        {
+          type: "assistant",
+          sessionId: "sess_a",
+          timestamp: "2026-03-15T00:00:06.000Z",
+          message: {
+            id: "msg_1",
+            role: "assistant",
+            model: "gpt-5.4",
+            phase: "final_answer",
+            content: [{ type: "text", text: "All good." }],
+          },
+        },
+      ],
+    });
+
+    expect(viewer.messageBlocks()[0]?.textContent).toContain("6 seconds ago");
+
+    now = Date.parse("2026-03-15T00:01:06.000Z");
+    vi.advanceTimersByTime(1000);
+
+    expect(viewer.messageBlocks()[0]?.textContent).toContain("1 minute ago");
   });
 
   it("clamps long final answers by default and expands them on demand", () => {
@@ -1300,6 +1431,18 @@ describe("renderViewerHtml", () => {
     });
   });
 
+  it("renders composer controls in one row above the prompt textarea", () => {
+    const viewer = bootViewer();
+    const composer = viewer.document.querySelector(".composer");
+    const toolbar = composer?.children[0] as HTMLElement | undefined;
+
+    expect(toolbar?.className).toBe("composer-toolbar");
+    expect(toolbar?.querySelector(".composer-actions #sendBtn")).not.toBeNull();
+    expect(toolbar?.querySelector(".composer-actions #interruptBtn")).not.toBeNull();
+    expect(toolbar?.querySelector("#forceSendToggle")).not.toBeNull();
+    expect(composer?.children[1]?.querySelector("#composerInput")).not.toBeNull();
+  });
+
   it("treats restored stopped sessions as read-only", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
@@ -1382,7 +1525,9 @@ describe("renderViewerHtml", () => {
   });
 });
 
-function bootViewer(options: { savedStorage?: Record<string, string>; url?: string; width?: number } = {}) {
+function bootViewer(
+  options: { savedStorage?: Record<string, string>; url?: string; width?: number; now?: () => number } = {},
+) {
   const dom = new JSDOM(renderViewerHtml(), {
     url: options.url ?? "http://127.0.0.1:8765/",
     runScripts: "outside-only",
@@ -1398,6 +1543,12 @@ function bootViewer(options: { savedStorage?: Record<string, string>; url?: stri
     configurable: true,
     value: viewportWidth,
   });
+  if (options.now) {
+    Object.defineProperty(dom.window.Date, "now", {
+      configurable: true,
+      value: options.now,
+    });
+  }
   (dom.window as unknown as Window & typeof globalThis & { matchMedia?: (query: string) => MediaQueryList }).matchMedia = (query: string) => ({
     matches: query === "(max-width: 980px)" ? viewportWidth <= 980 : false,
     media: query,

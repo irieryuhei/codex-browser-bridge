@@ -46,6 +46,17 @@ npm start
 
 viewer は既定で same-origin の WebSocket URL を使います。必要ならブラウザ UI から Bridge URL を上書きできます。
 
+## 開発時の watch 再起動
+
+ソース修正のたびに bridge を自動再起動したい場合は、開発用の watch 起動を使います。
+
+```shell
+npm install
+npm run dev
+```
+
+`src/**/*.ts` を保存すると、`tsx watch` が bridge を再起動します。配布用の動作確認や本番相当の起動は従来どおり `npm run build && npm start` を使ってください。
+
 ## 動作確認
 
 ```shell

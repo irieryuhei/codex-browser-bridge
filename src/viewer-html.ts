@@ -349,7 +349,30 @@ export function renderViewerHtml(): string {
     }
 
     .session-button.completed {
-      opacity: 0.58;
+      border-color: rgba(99, 113, 119, 0.18);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0)),
+        rgba(122, 134, 139, 0.16);
+      box-shadow: none;
+      opacity: 0.82;
+    }
+
+    .session-button.completed.active {
+      border-color: rgba(99, 113, 119, 0.24);
+      box-shadow:
+        inset 0 0 0 1px rgba(99, 113, 119, 0.14),
+        0 0 0 3px rgba(99, 113, 119, 0.08);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.02)),
+        rgba(122, 134, 139, 0.2);
+    }
+
+    .session-button.completed::before,
+    .session-button.completed .session-title,
+    .session-button.completed .session-meta,
+    .session-button.completed .session-preview,
+    .session-button.completed .session-status {
+      color: #637177;
     }
 
     .session-title {
@@ -572,12 +595,23 @@ export function renderViewerHtml(): string {
     }
 
     .message-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
       font-size: 12px;
       font-weight: 700;
       letter-spacing: 0.08em;
       text-transform: uppercase;
       color: var(--muted);
       margin-bottom: 6px;
+    }
+
+    .message-timestamp {
+      letter-spacing: normal;
+      text-transform: none;
+      font-weight: 600;
+      white-space: nowrap;
     }
 
     .conversation-collapse summary {
@@ -611,35 +645,30 @@ export function renderViewerHtml(): string {
       background: rgba(255, 250, 243, 0.94);
     }
 
-    .composer-actions {
+    .composer-toolbar {
       display: flex;
       gap: 10px;
       flex-wrap: wrap;
+      align-items: center;
     }
 
-    .composer-options {
+    .composer-actions {
       display: flex;
       align-items: center;
       gap: 12px;
       flex-wrap: wrap;
     }
 
-    .inline-toggle {
+    .toggle-inline {
       display: inline-flex;
       align-items: center;
       gap: 8px;
       font-size: 13px;
-      font-weight: 600;
       color: var(--muted);
     }
 
-    .inline-toggle input {
-      width: auto;
-      margin: 0;
-    }
-
     .hint {
-      font-size: 12px;
+      font-size: 13px;
       color: var(--muted);
     }
 
@@ -827,21 +856,21 @@ export function renderViewerHtml(): string {
         </div>
 
         <div class="composer">
+          <div class="composer-toolbar">
+            <div class="composer-actions">
+              <button id="sendBtn" class="primary" type="button" disabled>Send</button>
+              <button id="interruptBtn" class="secondary" type="button" disabled>Interrupt</button>
+              <label class="toggle-inline">
+                <input id="forceSendToggle" type="checkbox">
+                <span>Force Send</span>
+              </label>
+            </div>
+            <div id="composerHint" class="hint"></div>
+          </div>
           <label>
             Prompt
             <textarea id="composerInput" placeholder="Send a prompt to the selected session." disabled></textarea>
           </label>
-          <div class="composer-actions">
-            <button id="sendBtn" class="primary" type="button" disabled>Send</button>
-            <button id="interruptBtn" class="secondary" type="button" disabled>Interrupt</button>
-          </div>
-          <div class="composer-options">
-            <label class="inline-toggle">
-              <input id="forceSendToggle" type="checkbox" disabled>
-              Force send now
-            </label>
-          </div>
-          <div id="composerHint" class="hint">Select a session to start sending messages.</div>
         </div>
 
         <section id="permissionPanel" class="permission-panel" hidden></section>
@@ -1323,6 +1352,9 @@ export function renderViewerHtml(): string {
           setSelectedSession("", { historyMode: "replace", requestHistory: false });
           return;
         }
+        if (state.selectedSessionId && !state.histories.has(state.selectedSessionId)) {
+          send({ type: "get_history", sessionId: state.selectedSessionId });
+        }
         renderSessionList();
         renderViewerState();
         return;
@@ -1700,6 +1732,10 @@ export function renderViewerHtml(): string {
       if (repo) {
         parts.push("repo: " + repo);
       }
+      const relativeUpdatedAt = formatRelativeTime(session.updatedAt);
+      if (relativeUpdatedAt) {
+        parts.push(relativeUpdatedAt);
+      }
       if (session.model) {
         parts.push("model: " + sessionModelLabel(session));
       } else if (session.permissionMode === "plan") {
@@ -1760,6 +1796,40 @@ export function renderViewerHtml(): string {
       }
       return effort ? model + " / effort: " + effort : model;
     }
+
+    function formatRelativeTime(value) {
+      const timestamp = Date.parse(String(value || ""));
+      if (Number.isNaN(timestamp)) {
+        return "";
+      }
+      const elapsedMs = Math.max(0, Date.now() - timestamp);
+      const elapsedSeconds = Math.floor(elapsedMs / 1000);
+      if (elapsedSeconds < 5) {
+        return "just now";
+      }
+      if (elapsedSeconds < 60) {
+        return elapsedSeconds + " second" + (elapsedSeconds === 1 ? "" : "s") + " ago";
+      }
+      const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+      if (elapsedMinutes < 60) {
+        return elapsedMinutes + " minute" + (elapsedMinutes === 1 ? "" : "s") + " ago";
+      }
+      const elapsedHours = Math.floor(elapsedMinutes / 60);
+      if (elapsedHours < 24) {
+        return elapsedHours + " hour" + (elapsedHours === 1 ? "" : "s") + " ago";
+      }
+      const elapsedDays = Math.floor(elapsedHours / 24);
+      return elapsedDays + " day" + (elapsedDays === 1 ? "" : "s") + " ago";
+    }
+
+    window.setInterval(() => {
+      if (state.sessions.length > 0) {
+        renderSessionList();
+      }
+      if (state.selectedSessionId) {
+        renderMessages();
+      }
+    }, 1000);
 
     function renderPermissionPanel() {
       const session = currentSession();
@@ -1905,25 +1975,27 @@ export function renderViewerHtml(): string {
       interruptBtn.disabled = !connected || !session || session.status !== "running";
       forceSendToggle.disabled = !connected || !session;
 
-      if (!session) {
-        composerHint.textContent = "Select a session to start sending messages.";
+      if (!connected) {
+        composerHint.textContent = "Reconnect the bridge to send prompts.";
         return;
       }
-      if (!connected) {
-        composerHint.textContent = "Reconnect to the bridge to send prompts.";
+      if (!session) {
+        composerHint.textContent = "Select a conversation to send a prompt.";
         return;
       }
       if (session.status === "stopped") {
-        composerHint.textContent = "This stored session will resume when you send the next prompt.";
+        composerHint.textContent = "Send a prompt to resume this stored session.";
         return;
       }
-      if (session.status === "running" || session.status === "waiting_approval") {
-        composerHint.textContent = forceSendToggle.checked
-          ? "Force send will submit the next prompt immediately without bridge queueing."
-          : "Prompts sent now will be queued until the current turn settles. Enable Force send now to submit immediately instead.";
+      if (session.status === "running") {
+        composerHint.textContent = "Enable Force Send to submit immediately instead of queueing.";
         return;
       }
-      composerHint.textContent = "Send a new prompt or interrupt the active run.";
+      if (session.queueLength > 0) {
+        composerHint.textContent = "New prompts will be queued until the current turn finishes.";
+        return;
+      }
+      composerHint.textContent = "";
     }
 
     function renderMessages() {
@@ -2130,7 +2202,8 @@ export function renderViewerHtml(): string {
 
       const header = document.createElement("div");
       header.className = "message-header";
-      header.textContent =
+      const title = document.createElement("span");
+      title.textContent =
         item.role === "user" ? "You" :
         item.role === "thinking" ? "Thinking" :
         item.role === "draft" ? "Draft" :
@@ -2138,6 +2211,14 @@ export function renderViewerHtml(): string {
         item.role === "error" ? "Error" :
         item.phase === "final_answer" ? "Final Answer" :
         "Assistant";
+      header.appendChild(title);
+      const relativeTimestamp = formatRelativeTime(item.timestamp);
+      if (relativeTimestamp) {
+        const timestamp = document.createElement("span");
+        timestamp.className = "message-timestamp";
+        timestamp.textContent = relativeTimestamp;
+        header.appendChild(timestamp);
+      }
       card.appendChild(header);
 
       const body = document.createElement("div");
@@ -2394,15 +2475,13 @@ export function renderViewerHtml(): string {
       if (!session || !text) {
         return;
       }
-      const force = forceSendToggle.checked;
       composerInput.value = "";
-      forceSendToggle.checked = false;
       updateComposerState();
       send({
         type: "input",
         sessionId: session.sessionId,
         text,
-        ...(force ? { force: true } : {}),
+        ...(forceSendToggle.checked ? { force: true } : {}),
       });
     });
 
@@ -2470,9 +2549,6 @@ export function renderViewerHtml(): string {
     sessionListNextBtn.addEventListener("click", () => {
       state.sessionListOffset += MAX_VISIBLE_SESSIONS;
       renderSessionList();
-    });
-    forceSendToggle.addEventListener("change", () => {
-      updateComposerState();
     });
     window.addEventListener("popstate", () => {
       setSelectedSession(currentUrlSessionId(), { historyMode: "none", requestHistory: !!currentUrlSessionId() });
