@@ -173,6 +173,7 @@ describe("getStoredCodexSessionHistory", () => {
         title: "Follow up on the fork",
         preview: "Fork answer",
         answerState: "final_answer",
+        finalAnswerAt: "2026-03-17T00:00:02.000Z",
         createdAt: "2026-03-17T00:00:00.000Z",
         updatedAt: "2026-03-17T00:00:02.000Z",
         model: "",

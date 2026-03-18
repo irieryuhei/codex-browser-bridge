@@ -33,6 +33,8 @@ interface PendingUserInput {
   questions: Array<{ id: string }>;
 }
 
+const DEFAULT_MODEL = "gpt-5.4-mini";
+
 export function getCodexSpawnCommand(unrestricted = true): CodexSpawnCommand {
   if (!unrestricted) {
     return {
@@ -329,7 +331,7 @@ class AppServerCodexSession implements CodexSession {
         collaborationMode: {
           mode: this.collaborationMode,
           settings: {
-            model: this.startModel || "gpt-5.4",
+            model: this.startModel || DEFAULT_MODEL,
           },
         },
       };
@@ -600,7 +602,7 @@ class AppServerCodexSession implements CodexSession {
             input: { command },
           },
         ],
-        model: this.startModel || "codex",
+        model: this.startModel || DEFAULT_MODEL,
       },
     });
   }
@@ -653,7 +655,7 @@ class AppServerCodexSession implements CodexSession {
         id,
         role: "assistant",
         content: [{ type: "text", text }],
-        model: this.startModel || "codex",
+        model: this.startModel || DEFAULT_MODEL,
         ...(phase ? { phase } : {}),
       },
     });

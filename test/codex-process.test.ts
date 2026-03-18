@@ -106,6 +106,37 @@ describe("codex-process", () => {
     session.stop();
   });
 
+  it("defaults to gpt-5.4-mini when no model is provided", async () => {
+    const factory = createCodexSessionFactory();
+    const startPromise = factory.startSession({
+      projectPath: "/tmp/project-default-model",
+      unrestricted: true,
+    });
+    const child = fakeChildren[0];
+
+    await bootstrapSession(child, "thr_default_model");
+    const session = await startPromise;
+
+    session.sendInput("Use the default model");
+    await tick();
+
+    const turnReq = nextOutgoingRequest(child);
+    expect(turnReq).toMatchObject({
+      method: "turn/start",
+      params: {
+        threadId: "thr_default_model",
+        collaborationMode: {
+          settings: {
+            model: "gpt-5.4-mini",
+          },
+        },
+      },
+    });
+    expect(turnReq.params).not.toHaveProperty("model");
+
+    session.stop();
+  });
+
   it("resumes an existing thread when threadId is provided", async () => {
     const factory = createCodexSessionFactory();
     const startPromise = factory.startSession({

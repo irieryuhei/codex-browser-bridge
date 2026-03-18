@@ -37,6 +37,7 @@ export interface StoredCodexSessionSummary {
   title: string;
   preview: string;
   answerState: SessionAnswerState;
+  finalAnswerAt?: string;
   createdAt: string;
   updatedAt: string;
   model: string;
@@ -51,6 +52,7 @@ interface ParseState {
   lastPrompt: string;
   lastAssistantText: string;
   answerState: SessionAnswerState;
+  finalAnswerAt: string;
   createdAt: string;
   updatedAt: string;
   model: string;
@@ -303,6 +305,7 @@ async function parseCodexSessionSummaryFile(filePath: string): Promise<StoredCod
     lastPrompt: "",
     lastAssistantText: "",
     answerState: "",
+    finalAnswerAt: "",
     createdAt: "",
     updatedAt: "",
     model: "",
@@ -348,6 +351,7 @@ async function parseCodexSessionSummaryFile(filePath: string): Promise<StoredCod
     title: collapseTitle(state.firstPrompt || defaultSessionTitle(state.projectPath)),
     preview: collapsePreview(state.lastAssistantText || state.lastPrompt || state.firstPrompt),
     answerState: state.answerState,
+    ...(state.finalAnswerAt ? { finalAnswerAt: state.finalAnswerAt } : {}),
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
     model: state.model,
@@ -411,6 +415,7 @@ function applySummaryEntry(state: ParseState, entry: Record<string, unknown>): v
     if (payload.type === "agent_message" && typeof payload.message === "string" && payload.message.trim()) {
       state.lastAssistantText = payload.message;
       state.answerState = "final_answer";
+      state.finalAnswerAt = timestamp || state.finalAnswerAt;
     }
     return;
   }
@@ -456,6 +461,7 @@ function applySummaryEntry(state: ParseState, entry: Record<string, unknown>): v
   }
   if (payload.phase === "final_answer" || text.trim()) {
     state.answerState = "final_answer";
+    state.finalAnswerAt = timestamp || state.finalAnswerAt;
   }
 }
 

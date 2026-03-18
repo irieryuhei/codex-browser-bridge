@@ -121,6 +121,7 @@ interface SessionRecord {
   title: string;
   storedPreview: string;
   storedAnswerState: SessionAnswerState;
+  storedFinalAnswerAt: string;
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;
@@ -142,6 +143,7 @@ interface SessionSummary {
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;
+  finalAnswerAt?: string;
   model: string;
   modelReasoningEffort: string;
   permissionMode: PermissionMode;
@@ -222,6 +224,15 @@ export async function startBridgeServer(
         if (!existing.history.length) {
           existing.storedAnswerState = stored.answerState;
         }
+        if (
+          stored.finalAnswerAt
+          && (
+            !existing.storedFinalAnswerAt
+            || Date.parse(stored.finalAnswerAt) > Date.parse(existing.storedFinalAnswerAt)
+          )
+        ) {
+          existing.storedFinalAnswerAt = stored.finalAnswerAt;
+        }
         existing.createdAt ||= stored.createdAt;
         if (!existing.updatedAt || Date.parse(stored.updatedAt) > Date.parse(existing.updatedAt)) {
           existing.updatedAt = stored.updatedAt;
@@ -247,6 +258,7 @@ export async function startBridgeServer(
         title: stored.title,
         storedPreview: stored.preview,
         storedAnswerState: stored.answerState,
+        storedFinalAnswerAt: stored.finalAnswerAt || "",
         status: "stopped",
         createdAt: stored.createdAt,
         updatedAt: stored.updatedAt,
@@ -290,23 +302,27 @@ export async function startBridgeServer(
     }
   };
 
-  const buildSessionSummary = (session: SessionRecord): SessionSummary => ({
-    sessionId: session.sessionId,
-    title: session.title,
-    projectPath: session.projectPath,
-    status: session.status,
-    createdAt: session.createdAt,
-    updatedAt: session.updatedAt,
-    model: session.model,
-    modelReasoningEffort: session.modelReasoningEffort,
-    permissionMode: session.permissionMode,
-    pinned: session.pinned,
-    completed: session.completed,
-    preview: summarizeSessionPreview(session) || session.storedPreview,
-    answerState: summarizeSessionAnswerState(session),
-    queueLength: session.queuedInputs.length,
-    ...(session.pendingPermission ? { pendingPermission: session.pendingPermission } : {}),
-  });
+  const buildSessionSummary = (session: SessionRecord): SessionSummary => {
+    const finalAnswerAt = summarizeSessionFinalAnswerAt(session);
+    return {
+      sessionId: session.sessionId,
+      title: session.title,
+      projectPath: session.projectPath,
+      status: session.status,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      ...(finalAnswerAt ? { finalAnswerAt } : {}),
+      model: session.model,
+      modelReasoningEffort: session.modelReasoningEffort,
+      permissionMode: session.permissionMode,
+      pinned: session.pinned,
+      completed: session.completed,
+      preview: summarizeSessionPreview(session) || session.storedPreview,
+      answerState: summarizeSessionAnswerState(session),
+      queueLength: session.queuedInputs.length,
+      ...(session.pendingPermission ? { pendingPermission: session.pendingPermission } : {}),
+    };
+  };
 
   const buildSelectableProjectPaths = (): string[] => {
     const sessionProjectPaths = Array.from(sessions.values())
@@ -522,6 +538,7 @@ export async function startBridgeServer(
             title: defaultSessionTitle(projectPath),
             storedPreview: "",
             storedAnswerState: "",
+            storedFinalAnswerAt: "",
             status: "idle",
             createdAt: now,
             updatedAt: now,
@@ -727,6 +744,7 @@ export async function startBridgeServer(
       title: restored.title,
       storedPreview: "",
       storedAnswerState: "",
+      storedFinalAnswerAt: "",
       status: "stopped",
       createdAt: restored.createdAt,
       updatedAt: restored.updatedAt,
@@ -1188,6 +1206,18 @@ function summarizeSessionAnswerState(session: SessionRecord): SessionAnswerState
   }
 
   return answerState;
+}
+
+function summarizeSessionFinalAnswerAt(session: SessionRecord): string {
+  let finalAnswerAt = session.storedFinalAnswerAt;
+
+  for (const item of session.history) {
+    if (item.type === "assistant" && item.message.phase === "final_answer") {
+      finalAnswerAt = item.timestamp;
+    }
+  }
+
+  return finalAnswerAt;
 }
 
 function collapseWhitespace(value: string): string {

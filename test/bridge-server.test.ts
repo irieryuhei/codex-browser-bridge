@@ -231,6 +231,7 @@ describe("startBridgeServer", () => {
             model: "gpt-5.4",
             modelReasoningEffort: "xhigh",
             answerState: "final_answer",
+            finalAnswerAt: "2026-03-15T00:00:03.000Z",
           }),
         ],
       });
@@ -645,6 +646,7 @@ describe("startBridgeServer", () => {
           pinned: true,
           completed: true,
           answerState: "final_answer",
+          finalAnswerAt: expect.any(String),
         }),
       ],
     });
@@ -765,6 +767,9 @@ describe("startBridgeServer", () => {
       const current = msg.sessions.find((entry: Record<string, unknown>) => entry.sessionId === created.sessionId);
       return current?.answerState === "commentary";
     });
+    const commentarySession = commentarySummary.sessions.find((entry: Record<string, unknown>) => {
+      return entry.sessionId === created.sessionId;
+    });
     expect(commentarySummary).toMatchObject({
       sessions: [
         expect.objectContaining({
@@ -773,6 +778,7 @@ describe("startBridgeServer", () => {
         }),
       ],
     });
+    expect(commentarySession?.finalAnswerAt).toBeUndefined();
 
     if (!session) {
       throw new Error("expected session");
@@ -796,14 +802,19 @@ describe("startBridgeServer", () => {
       const current = msg.sessions.find((entry: Record<string, unknown>) => entry.sessionId === created.sessionId);
       return current?.answerState === "final_answer";
     });
+    const finalSession = finalSummary.sessions.find((entry: Record<string, unknown>) => {
+      return entry.sessionId === created.sessionId;
+    });
     expect(finalSummary).toMatchObject({
       sessions: [
         expect.objectContaining({
           sessionId: created.sessionId,
           answerState: "final_answer",
+          finalAnswerAt: expect.any(String),
         }),
       ],
     });
+    expect(typeof finalSession?.finalAnswerAt).toBe("string");
 
     ws.close();
   });

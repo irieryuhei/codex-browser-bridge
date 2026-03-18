@@ -330,6 +330,16 @@ export function renderViewerHtml(): string {
       border-color: var(--session-border-strong, rgba(15, 118, 110, 0.3));
     }
 
+    .session-button.pinned {
+      border-color: rgba(15, 118, 110, 0.42);
+      box-shadow:
+        inset 4px 0 0 rgba(15, 118, 110, 0.76),
+        0 10px 24px rgba(15, 118, 110, 0.08);
+      background:
+        linear-gradient(180deg, rgba(15, 118, 110, 0.1), rgba(255, 255, 255, 0.04)),
+        var(--session-bg, rgba(255, 255, 255, 0.72));
+    }
+
     .session-button.active {
       border-color: var(--session-border-strong, rgba(15, 118, 110, 0.34));
       box-shadow:
@@ -341,11 +351,36 @@ export function renderViewerHtml(): string {
     }
 
     .session-button.pinned::before {
-      content: "PIN";
+      content: "Pinned";
+      display: inline-flex;
+      align-self: start;
+      justify-self: start;
+      width: fit-content;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(15, 118, 110, 0.12);
       font-size: 10px;
       font-weight: 800;
-      letter-spacing: 0.08em;
-      color: var(--accent);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent-strong);
+    }
+
+    .session-button.pinned .session-title {
+      color: var(--accent-strong);
+    }
+
+    .session-button.pinned .session-time,
+    .session-button.pinned .session-preview {
+      color: #46575d;
+    }
+
+    .session-list-divider {
+      width: 100%;
+      margin: 2px 0;
+      border: 0;
+      height: 1px;
+      background: linear-gradient(90deg, rgba(21, 35, 41, 0), rgba(15, 118, 110, 0.45), rgba(21, 35, 41, 0));
     }
 
     .session-button.completed {
@@ -369,7 +404,7 @@ export function renderViewerHtml(): string {
 
     .session-button.completed::before,
     .session-button.completed .session-title,
-    .session-button.completed .session-meta,
+    .session-button.completed .session-time,
     .session-button.completed .session-preview,
     .session-button.completed .session-status {
       color: #637177;
@@ -383,9 +418,43 @@ export function renderViewerHtml(): string {
 
     .session-title-row {
       display: flex;
-      align-items: start;
+      align-items: center;
       justify-content: space-between;
       gap: 10px;
+    }
+
+    .session-title-group {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .session-badge {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1;
+      white-space: nowrap;
+      letter-spacing: 0.08em;
+    }
+
+    .session-badge.unread {
+      border-color: rgba(217, 119, 6, 0.22);
+      background: rgba(217, 119, 6, 0.14);
+      color: #92400e;
+    }
+
+    .session-time {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
     }
 
     .session-status {
@@ -415,7 +484,6 @@ export function renderViewerHtml(): string {
       to { transform: rotate(360deg); }
     }
 
-    .session-meta,
     .session-preview {
       font-size: 12px;
       color: var(--muted);
@@ -665,6 +733,7 @@ export function renderViewerHtml(): string {
       gap: 8px;
       font-size: 13px;
       color: var(--muted);
+      white-space: nowrap;
     }
 
     .hint {
@@ -799,15 +868,15 @@ export function renderViewerHtml(): string {
               <div class="filter-toggle-row">
                 <label class="filter-toggle">
                   <input id="unreadOnlyFilter" type="checkbox">
-                  <span>Unread</span>
+                  <span>未読のみ</span>
                 </label>
                 <label class="filter-toggle">
-                  <input id="settledOnlyFilter" type="checkbox">
-                  <span>Settled</span>
+                  <input id="includeAnsweringFilter" type="checkbox" checked>
+                  <span>回答中を含める</span>
                 </label>
                 <label class="filter-toggle">
                   <input id="showCompletedFilter" type="checkbox" checked>
-                  <span>Completed</span>
+                  <span>完了を含める</span>
                 </label>
               </div>
             </div>
@@ -896,7 +965,7 @@ export function renderViewerHtml(): string {
     const sessionFilterInput = document.getElementById("sessionFilterInput");
     const sessionRepoFilter = document.getElementById("sessionRepoFilter");
     const unreadOnlyFilter = document.getElementById("unreadOnlyFilter");
-    const settledOnlyFilter = document.getElementById("settledOnlyFilter");
+    const includeAnsweringFilter = document.getElementById("includeAnsweringFilter");
     const showCompletedFilter = document.getElementById("showCompletedFilter");
     const sessionListPrevBtn = document.getElementById("sessionListPrevBtn");
     const sessionListNextBtn = document.getElementById("sessionListNextBtn");
@@ -933,12 +1002,15 @@ export function renderViewerHtml(): string {
       sharedProjectPaths: [],
       sessionListOffset: 0,
       unreadSessionIds: new Set(),
+      pendingRepoFilterValue: "",
+      expandedConversationKeys: new Set(),
       expandedFinalAnswerKeys: new Set(),
       listPanelWidth: null,
       activeListResize: null,
     };
     const STORAGE_KEY = "codex-browser-bridge.viewer";
     const MAX_VISIBLE_SESSIONS = 10;
+    const MAX_UNREAD_SESSION_COUNT = 50;
     const DEFAULT_LIST_PANEL_WIDTH = 380;
     const MIN_LIST_PANEL_WIDTH = 280;
     const MAX_LIST_PANEL_WIDTH = 720;
@@ -960,15 +1032,16 @@ export function renderViewerHtml(): string {
       try {
         const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
         if (!parsed || typeof parsed !== "object") {
-          return { projectPath: "", listPanelWidth: null };
+          return { projectPath: "", listPanelWidth: null, unreadSessionIds: [] };
         }
         const savedWidth = Number(parsed.listPanelWidth);
         return {
           projectPath: typeof parsed.projectPath === "string" ? parsed.projectPath : "",
           listPanelWidth: Number.isFinite(savedWidth) && savedWidth > 0 ? savedWidth : null,
+          unreadSessionIds: normalizeSavedUnreadSessionIds(parsed.unreadSessionIds),
         };
       } catch {
-        return { projectPath: "", listPanelWidth: null };
+        return { projectPath: "", listPanelWidth: null, unreadSessionIds: [] };
       }
     }
 
@@ -979,7 +1052,25 @@ export function renderViewerHtml(): string {
       if (Number.isFinite(state.listPanelWidth) && state.listPanelWidth > 0) {
         nextState.listPanelWidth = Math.round(state.listPanelWidth);
       }
+      nextState.unreadSessionIds = Array.from(state.unreadSessionIds);
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+    }
+
+    function normalizeSavedUnreadSessionIds(value) {
+      if (!Array.isArray(value)) {
+        return [];
+      }
+      const unique = [];
+      const seen = new Set();
+      value.forEach((entry) => {
+        const sessionId = String(entry || "").trim();
+        if (!sessionId || seen.has(sessionId)) {
+          return;
+        }
+        seen.add(sessionId);
+        unique.push(sessionId);
+      });
+      return unique;
     }
 
     function normalizeProjectPaths(projectPaths) {
@@ -1127,20 +1218,84 @@ export function renderViewerHtml(): string {
       updateComposerState();
     }
 
-    function currentUrlSessionId() {
-      const sessionId = new URL(window.location.href).searchParams.get("session");
-      return typeof sessionId === "string" ? sessionId.trim() : "";
+    function parseUrlBoolean(value, defaultValue) {
+      if (value === null) {
+        return defaultValue;
+      }
+      const normalized = String(value).trim().toLowerCase();
+      if (normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on") {
+        return true;
+      }
+      if (normalized === "0" || normalized === "false" || normalized === "no" || normalized === "off") {
+        return false;
+      }
+      return defaultValue;
     }
 
-    function syncSessionUrl(sessionId, historyMode) {
+    function currentUrlState() {
+      const searchParams = new URL(window.location.href).searchParams;
+      return {
+        sessionId: String(searchParams.get("session") || "").trim(),
+        query: String(searchParams.get("q") || ""),
+        repo: String(searchParams.get("repo") || ""),
+        unreadOnly: parseUrlBoolean(searchParams.get("unreadOnly"), false),
+        includeAnswering: parseUrlBoolean(searchParams.get("includeAnswering"), true),
+        showCompleted: parseUrlBoolean(searchParams.get("showCompleted"), true),
+      };
+    }
+
+    function applyUrlState() {
+      const urlState = currentUrlState();
+      sessionFilterInput.value = urlState.query;
+      state.pendingRepoFilterValue = urlState.repo;
+      sessionRepoFilter.value = urlState.repo;
+      unreadOnlyFilter.checked = urlState.unreadOnly;
+      includeAnsweringFilter.checked = urlState.includeAnswering;
+      showCompletedFilter.checked = urlState.showCompleted;
+      state.sessionListOffset = 0;
+      return urlState.sessionId;
+    }
+
+    function currentRepoFilterValue() {
+      return String(sessionRepoFilter.value || state.pendingRepoFilterValue || "").trim().toLowerCase();
+    }
+
+    function syncViewerUrl(sessionId, historyMode) {
       if (historyMode === "none") {
         return;
       }
       const url = new URL(window.location.href);
+      const query = String(sessionFilterInput.value || "").trim();
+      const repo = currentRepoFilterValue();
       if (sessionId) {
         url.searchParams.set("session", sessionId);
       } else {
         url.searchParams.delete("session");
+      }
+      if (query) {
+        url.searchParams.set("q", query);
+      } else {
+        url.searchParams.delete("q");
+      }
+      if (repo) {
+        url.searchParams.set("repo", repo);
+      } else {
+        url.searchParams.delete("repo");
+      }
+      if (unreadOnlyFilter.checked) {
+        url.searchParams.set("unreadOnly", "1");
+      } else {
+        url.searchParams.delete("unreadOnly");
+      }
+      if (includeAnsweringFilter.checked) {
+        url.searchParams.delete("includeAnswering");
+      } else {
+        url.searchParams.set("includeAnswering", "0");
+      }
+      if (showCompletedFilter.checked) {
+        url.searchParams.delete("showCompleted");
+      } else {
+        url.searchParams.set("showCompleted", "0");
       }
       const nextUrl = url.pathname + url.search + url.hash;
       const currentUrl = window.location.pathname + window.location.search + window.location.hash;
@@ -1293,7 +1448,7 @@ export function renderViewerHtml(): string {
       if (state.selectedSessionId) {
         clearSessionUnread(state.selectedSessionId);
       }
-      syncSessionUrl(state.selectedSessionId, options.historyMode || "none");
+      syncViewerUrl(state.selectedSessionId, options.historyMode || "none");
       updateResponsiveLayout();
       focusActiveMobilePane();
       renderSessionList();
@@ -1331,7 +1486,6 @@ export function renderViewerHtml(): string {
         );
         pruneUnreadSessions();
         renderProjectPathOptions();
-        renderSessionRepoOptions();
         const recentConversationProjectPaths = projectPathChoices();
         if (
           !state.hydratedProjectPaths
@@ -1485,26 +1639,40 @@ export function renderViewerHtml(): string {
     }
 
     function pruneUnreadSessions() {
-      const currentIds = new Set(state.sessions.map((session) => session.sessionId));
+      const trackedIds = new Set(
+        state.sessions
+          .slice(0, MAX_UNREAD_SESSION_COUNT)
+          .map((session) => session.sessionId),
+      );
+      let changed = false;
       Array.from(state.unreadSessionIds).forEach((sessionId) => {
-        if (!currentIds.has(sessionId)) {
+        if (!trackedIds.has(sessionId)) {
           state.unreadSessionIds.delete(sessionId);
+          changed = true;
         }
       });
+      if (changed) {
+        saveState();
+      }
     }
 
     function markSessionUnread(sessionId) {
       if (!sessionId || sessionId === state.selectedSessionId) {
         return;
       }
-      state.unreadSessionIds.add(sessionId);
+      if (!state.unreadSessionIds.has(sessionId)) {
+        state.unreadSessionIds.add(sessionId);
+        saveState();
+      }
     }
 
     function clearSessionUnread(sessionId) {
       if (!sessionId) {
         return;
       }
-      state.unreadSessionIds.delete(sessionId);
+      if (state.unreadSessionIds.delete(sessionId)) {
+        saveState();
+      }
     }
 
     function enqueueDraft(sessionId, text) {
@@ -1545,7 +1713,8 @@ export function renderViewerHtml(): string {
         state.sessionListOffset,
         state.sessionListOffset + MAX_VISIBLE_SESSIONS,
       );
-      updateSessionListSummary(visibleSessions.length, state.sessions.length, state.sessionListOffset);
+      renderSessionRepoOptions(visibleSessions);
+      updateSessionListSummary(visibleSessions.length, filteredSessions.length, state.sessionListOffset);
       sessionListPrevBtn.disabled = state.sessionListOffset === 0;
       sessionListNextBtn.disabled = state.sessionListOffset + MAX_VISIBLE_SESSIONS >= filteredSessions.length;
 
@@ -1559,7 +1728,18 @@ export function renderViewerHtml(): string {
         return;
       }
 
+      const shouldShowPinnedDivider = visibleSessions.some((session) => session.pinned)
+        && visibleSessions.some((session) => !session.pinned);
+      let insertedPinnedDivider = false;
       visibleSessions.forEach((session) => {
+        if (shouldShowPinnedDivider && !insertedPinnedDivider && !session.pinned) {
+          const divider = document.createElement("hr");
+          divider.className = "session-list-divider";
+          divider.setAttribute("aria-hidden", "true");
+          sessionsList.appendChild(divider);
+          insertedPinnedDivider = true;
+        }
+
         const button = document.createElement("button");
         button.type = "button";
         button.className = "session-button";
@@ -1581,10 +1761,30 @@ export function renderViewerHtml(): string {
         const titleRow = document.createElement("div");
         titleRow.className = "session-title-row";
 
+        const titleGroup = document.createElement("div");
+        titleGroup.className = "session-title-group";
+
         const title = document.createElement("div");
         title.className = "session-title";
         title.textContent = session.title || session.sessionId;
-        titleRow.appendChild(title);
+        titleGroup.appendChild(title);
+
+        if (isSessionUnread(session)) {
+          const unreadBadge = document.createElement("span");
+          unreadBadge.className = "session-badge unread";
+          unreadBadge.textContent = "未読";
+          titleGroup.appendChild(unreadBadge);
+        }
+
+        const relativeTime = sessionRelativeTimeLabel(session);
+        if (relativeTime) {
+          const time = document.createElement("span");
+          time.className = "session-time";
+          time.textContent = relativeTime;
+          titleGroup.appendChild(time);
+        }
+
+        titleRow.appendChild(titleGroup);
 
         if (shouldShowSessionSpinner(session)) {
           const status = document.createElement("span");
@@ -1599,11 +1799,6 @@ export function renderViewerHtml(): string {
         }
 
         button.appendChild(titleRow);
-
-        const meta = document.createElement("div");
-        meta.className = "session-meta";
-        meta.textContent = sessionMetaLabel(session) ? " " + sessionMetaLabel(session) + " " : "";
-        button.appendChild(meta);
 
         const preview = document.createElement("div");
         preview.className = "session-preview";
@@ -1625,9 +1820,9 @@ export function renderViewerHtml(): string {
     function currentSessionFilters() {
       return {
         query: normalizedSessionFilter(),
-        repo: String(sessionRepoFilter.value || "").trim().toLowerCase(),
+        repo: currentRepoFilterValue(),
         unreadOnly: unreadOnlyFilter.checked,
-        settledOnly: settledOnlyFilter.checked,
+        includeAnswering: includeAnsweringFilter.checked,
         showCompleted: showCompletedFilter.checked,
       };
     }
@@ -1660,7 +1855,7 @@ export function renderViewerHtml(): string {
         return false;
       }
 
-      if (filters.settledOnly && !isSessionSettled(session)) {
+      if (!filters.includeAnswering && !isSessionSettled(session)) {
         return false;
       }
 
@@ -1671,14 +1866,19 @@ export function renderViewerHtml(): string {
       return true;
     }
 
-    function renderSessionRepoOptions() {
-      const currentValue = String(sessionRepoFilter.value || "").trim().toLowerCase();
-      const repos = Array.from(new Set(
-        state.sessions
-          .map((session) => shortProject(session.projectPath))
-          .filter(Boolean)
-          .map((repo) => repo.toLowerCase()),
-      )).sort();
+    function renderSessionRepoOptions(sessions) {
+      const currentValue = currentRepoFilterValue();
+      const repos = [];
+      const seenRepos = new Set();
+
+      sessions.forEach((session) => {
+        const repo = shortProject(session.projectPath).trim().toLowerCase();
+        if (!repo || seenRepos.has(repo)) {
+          return;
+        }
+        seenRepos.add(repo);
+        repos.push(repo);
+      });
 
       sessionRepoFilter.replaceChildren();
       const allOption = document.createElement("option");
@@ -1693,7 +1893,16 @@ export function renderViewerHtml(): string {
         sessionRepoFilter.appendChild(option);
       });
 
-      sessionRepoFilter.value = repos.includes(currentValue) ? currentValue : "";
+      if (currentValue && !seenRepos.has(currentValue)) {
+        const selectedOption = document.createElement("option");
+        selectedOption.value = currentValue;
+        selectedOption.textContent = currentValue;
+        sessionRepoFilter.appendChild(selectedOption);
+        seenRepos.add(currentValue);
+      }
+
+      sessionRepoFilter.value = currentValue && seenRepos.has(currentValue) ? currentValue : "";
+      state.pendingRepoFilterValue = "";
     }
 
     function clampSessionListOffset(offset, filteredCount) {
@@ -1724,27 +1933,6 @@ export function renderViewerHtml(): string {
 
     function shouldShowSessionSpinner(session) {
       return session.status !== "stopped" && session.answerState === "commentary";
-    }
-
-    function sessionMetaLabel(session) {
-      const parts = [];
-      const repo = shortProject(session.projectPath);
-      if (repo) {
-        parts.push("repo: " + repo);
-      }
-      const relativeUpdatedAt = formatRelativeTime(session.updatedAt);
-      if (relativeUpdatedAt) {
-        parts.push(relativeUpdatedAt);
-      }
-      if (session.model) {
-        parts.push("model: " + sessionModelLabel(session));
-      } else if (session.permissionMode === "plan") {
-        parts.push("mode: plan");
-      }
-      if (session.queueLength > 0) {
-        parts.push("queued: " + session.queueLength);
-      }
-      return parts.join(" ");
     }
 
     function renderViewerState() {
@@ -1797,6 +1985,13 @@ export function renderViewerHtml(): string {
       return effort ? model + " / effort: " + effort : model;
     }
 
+    function sessionRelativeTimeLabel(session) {
+      const timestamp = session && session.answerState === "final_answer"
+        ? (session.finalAnswerAt || session.updatedAt)
+        : session.updatedAt;
+      return formatRelativeTime(timestamp);
+    }
+
     function formatRelativeTime(value) {
       const timestamp = Date.parse(String(value || ""));
       if (Number.isNaN(timestamp)) {
@@ -1804,22 +1999,19 @@ export function renderViewerHtml(): string {
       }
       const elapsedMs = Math.max(0, Date.now() - timestamp);
       const elapsedSeconds = Math.floor(elapsedMs / 1000);
-      if (elapsedSeconds < 5) {
-        return "just now";
-      }
       if (elapsedSeconds < 60) {
-        return elapsedSeconds + " second" + (elapsedSeconds === 1 ? "" : "s") + " ago";
+        return elapsedSeconds + "秒前";
       }
       const elapsedMinutes = Math.floor(elapsedSeconds / 60);
       if (elapsedMinutes < 60) {
-        return elapsedMinutes + " minute" + (elapsedMinutes === 1 ? "" : "s") + " ago";
+        return elapsedMinutes + "分前";
       }
       const elapsedHours = Math.floor(elapsedMinutes / 60);
       if (elapsedHours < 24) {
-        return elapsedHours + " hour" + (elapsedHours === 1 ? "" : "s") + " ago";
+        return elapsedHours + "時間前";
       }
       const elapsedDays = Math.floor(elapsedHours / 24);
-      return elapsedDays + " day" + (elapsedDays === 1 ? "" : "s") + " ago";
+      return elapsedDays + "日前";
     }
 
     window.setInterval(() => {
@@ -2008,7 +2200,7 @@ export function renderViewerHtml(): string {
       const history = state.histories.get(session.sessionId) || [];
       const entries = buildDisplayEntries(history);
       const blocks = buildConversationBlocks(entries);
-      const rendered = blocks.slice().reverse().map(renderConversationBlock);
+      const rendered = blocks.slice().reverse().map((block) => renderConversationBlock(block, session.sessionId));
       messages.replaceChildren(...rendered);
       syncExpandableFinalAnswerCards();
     }
@@ -2164,13 +2356,22 @@ export function renderViewerHtml(): string {
       return blocks;
     }
 
-    function renderConversationBlock(block) {
+    function renderConversationBlock(block, sessionId) {
       if (block.type === "message") {
         return renderMessageCard(block.item);
       }
 
       const detail = document.createElement("details");
       detail.className = "conversation-collapse";
+      const conversationKey = conversationCollapseKey(block, sessionId);
+      detail.open = state.expandedConversationKeys.has(conversationKey);
+      detail.addEventListener("toggle", () => {
+        if (detail.open) {
+          state.expandedConversationKeys.add(conversationKey);
+          return;
+        }
+        state.expandedConversationKeys.delete(conversationKey);
+      });
       const summary = document.createElement("summary");
       const left = document.createElement("strong");
       left.textContent = "途中の会話 (" + block.items.length + "件)";
@@ -2188,6 +2389,26 @@ export function renderViewerHtml(): string {
       });
       detail.appendChild(body);
       return detail;
+    }
+
+    function conversationCollapseKey(block, sessionId) {
+      const summary = block && block.summary ? block.summary : null;
+      const userItem = block && block.userItem ? block.userItem : null;
+      const summaryKey = summary
+        ? [
+            summary.id || "",
+            summary.phase || "",
+            summary.timestamp || "",
+            summary.text || "",
+          ].join("|")
+        : "";
+      const userKey = userItem
+        ? [
+            userItem.timestamp || "",
+            userItem.text || "",
+          ].join("|")
+        : "";
+      return [sessionId || "", userKey, summaryKey].join("::");
     }
 
     function renderMessageCard(item) {
@@ -2498,8 +2719,9 @@ export function renderViewerHtml(): string {
 
     const savedState = loadSavedState();
     projectPathInput.value = savedState.projectPath || "/workspace/mserver";
+    state.unreadSessionIds = new Set(savedState.unreadSessionIds || []);
     renderProjectPathOptions();
-    modelInput.value = "gpt-5.4";
+    modelInput.value = "gpt-5.4-mini";
     modelReasoningEffortSelect.value = "xhigh";
     bridgeUrlInput.value = defaultSocketUrl();
     if (savedState.listPanelWidth !== null) {
@@ -2525,22 +2747,27 @@ export function renderViewerHtml(): string {
     sessionFilterInput.addEventListener("input", () => {
       state.sessionListOffset = 0;
       renderSessionList();
+      syncViewerUrl(state.selectedSessionId, "replace");
     });
     sessionRepoFilter.addEventListener("change", () => {
       state.sessionListOffset = 0;
       renderSessionList();
+      syncViewerUrl(state.selectedSessionId, "replace");
     });
     unreadOnlyFilter.addEventListener("change", () => {
       state.sessionListOffset = 0;
       renderSessionList();
+      syncViewerUrl(state.selectedSessionId, "replace");
     });
-    settledOnlyFilter.addEventListener("change", () => {
+    includeAnsweringFilter.addEventListener("change", () => {
       state.sessionListOffset = 0;
       renderSessionList();
+      syncViewerUrl(state.selectedSessionId, "replace");
     });
     showCompletedFilter.addEventListener("change", () => {
       state.sessionListOffset = 0;
       renderSessionList();
+      syncViewerUrl(state.selectedSessionId, "replace");
     });
     sessionListPrevBtn.addEventListener("click", () => {
       state.sessionListOffset = Math.max(0, state.sessionListOffset - MAX_VISIBLE_SESSIONS);
@@ -2551,7 +2778,8 @@ export function renderViewerHtml(): string {
       renderSessionList();
     });
     window.addEventListener("popstate", () => {
-      setSelectedSession(currentUrlSessionId(), { historyMode: "none", requestHistory: !!currentUrlSessionId() });
+      const sessionId = applyUrlState();
+      setSelectedSession(sessionId, { historyMode: "none", requestHistory: !!sessionId });
     });
     window.addEventListener("resize", () => {
       updateResponsiveLayout();
@@ -2563,7 +2791,8 @@ export function renderViewerHtml(): string {
       syncExpandableFinalAnswerCards();
     });
     ensureSocket();
-    setSelectedSession(currentUrlSessionId(), { historyMode: "replace", requestHistory: false });
+    const initialSessionId = applyUrlState();
+    setSelectedSession(initialSessionId, { historyMode: "replace", requestHistory: false });
   </script>
 </body>
 </html>`;
