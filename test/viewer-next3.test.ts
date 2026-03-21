@@ -18,8 +18,8 @@ describe("renderViewerNext3Html", () => {
   it("renders the next3 viewer shell with standalone assets", () => {
     const html = renderViewerNext3Html();
 
-    expect(html).toContain('href="/viewer-next3/app.css"');
-    expect(html).toContain('src="/viewer-next3/app.js"');
+    expect(html).toContain('href="/app.css"');
+    expect(html).toContain('src="/app.js"');
     expect(html).toContain('id="n3Layout"');
     expect(html).toContain('id="bridgeControls"');
     expect(html).toContain('id="permissionPanel"');
@@ -270,7 +270,7 @@ describe("renderViewerNext3Html", () => {
 
 function bootViewer(options = {}) {
   const dom = new JSDOM(renderViewerNext3Html(), {
-    url: options.url ?? "http://127.0.0.1:8765/viewer-next3/",
+    url: options.url ?? "http://127.0.0.1:8765/",
     runScripts: "outside-only",
   });
   doms.push(dom);

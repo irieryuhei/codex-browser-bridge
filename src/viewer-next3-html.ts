@@ -178,11 +178,11 @@ export function renderViewerNext3Html(): string {
     '  <meta charset="utf-8">',
     '  <meta name="viewport" content="width=device-width, initial-scale=1">',
     "  <title>codex-browser-bridge viewer-next3</title>",
-    '  <link rel="stylesheet" href="/viewer-next3/app.css">',
+    '  <link rel="stylesheet" href="/app.css">',
     "</head>",
     "<body>",
     VIEWER_NEXT3_BODY,
-    '  <script defer src="/viewer-next3/app.js"></script>',
+    '  <script defer src="/app.js"></script>',
     "</body>",
     "</html>",
   ].join("\n");

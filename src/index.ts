@@ -16,9 +16,6 @@ async function main(): Promise<void> {
 
   console.log(`[bridge] Listening on ${formatListenUrl(host, server.port)}`);
   console.log(`[bridge] Viewer: http://127.0.0.1:${server.port}/`);
-  console.log(`[bridge] Viewer Next: http://127.0.0.1:${server.port}/viewer-next/`);
-  console.log(`[bridge] Viewer Next 2: http://127.0.0.1:${server.port}/viewer-next2/`);
-  console.log(`[bridge] Viewer Next 3: http://127.0.0.1:${server.port}/viewer-next3/`);
   console.log(`[bridge] Health: http://127.0.0.1:${server.port}/health`);
 
   const shutdown = async (): Promise<void> => {

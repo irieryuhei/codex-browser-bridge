@@ -11,14 +11,8 @@ import {
   type PersistedHistoryMessage,
   type PersistedSessionRecord,
 } from "./session-state.js";
-import { VIEWER_NEXT_CSS } from "./viewer-next-css.js";
-import { renderViewerNextHtml } from "./viewer-next-html.js";
-import { VIEWER_NEXT_JS } from "./viewer-next-js.js";
-import { VIEWER_NEXT2_CSS, VIEWER_NEXT2_JS } from "./viewer-next2-assets.js";
-import { renderViewerNext2Html } from "./viewer-next2-html.js";
 import { VIEWER_NEXT3_CSS, VIEWER_NEXT3_JS } from "./viewer-next3-assets.js";
 import { renderViewerNext3Html } from "./viewer-next3-html.js";
-import { renderViewerHtml } from "./viewer-html.js";
 
 export type PermissionMode = "default" | "plan";
 export type SessionStatus = "starting" | "idle" | "running" | "waiting_approval" | "stopped";
@@ -308,59 +302,17 @@ export async function startBridgeServer(
 
     if (req.method === "GET" && requestPath === "/") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(renderViewerHtml());
-      return;
-    }
-
-    if (req.method === "GET" && (requestPath === "/viewer-next" || requestPath === "/viewer-next/")) {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(renderViewerNextHtml());
-      return;
-    }
-
-    if (req.method === "GET" && requestPath === "/viewer-next/app.css") {
-      res.writeHead(200, { "Content-Type": "text/css; charset=utf-8" });
-      res.end(VIEWER_NEXT_CSS);
-      return;
-    }
-
-    if (req.method === "GET" && requestPath === "/viewer-next/app.js") {
-      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8" });
-      res.end(VIEWER_NEXT_JS);
-      return;
-    }
-
-    if (req.method === "GET" && (requestPath === "/viewer-next2" || requestPath === "/viewer-next2/")) {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(renderViewerNext2Html());
-      return;
-    }
-
-    if (req.method === "GET" && requestPath === "/viewer-next2/app.css") {
-      res.writeHead(200, { "Content-Type": "text/css; charset=utf-8" });
-      res.end(VIEWER_NEXT2_CSS);
-      return;
-    }
-
-    if (req.method === "GET" && requestPath === "/viewer-next2/app.js") {
-      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8" });
-      res.end(VIEWER_NEXT2_JS);
-      return;
-    }
-
-    if (req.method === "GET" && (requestPath === "/viewer-next3" || requestPath === "/viewer-next3/")) {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(renderViewerNext3Html());
       return;
     }
 
-    if (req.method === "GET" && requestPath === "/viewer-next3/app.css") {
+    if (req.method === "GET" && requestPath === "/app.css") {
       res.writeHead(200, { "Content-Type": "text/css; charset=utf-8" });
       res.end(VIEWER_NEXT3_CSS);
       return;
     }
 
-    if (req.method === "GET" && requestPath === "/viewer-next3/app.js") {
+    if (req.method === "GET" && requestPath === "/app.js") {
       res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8" });
       res.end(VIEWER_NEXT3_JS);
       return;
