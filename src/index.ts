@@ -1,10 +1,11 @@
 import { join } from "node:path";
 import { startBridgeServer } from "./bridge-server.js";
 import { createCodexSessionFactory } from "./codex-process.js";
+import { formatListenUrl, resolveBridgeHost } from "./network.js";
 
 async function main(): Promise<void> {
   const port = parseIntegerEnv(process.env.PORT) ?? parseIntegerEnv(process.env.BRIDGE_PORT) ?? 8765;
-  const host = process.env.HOST ?? process.env.BRIDGE_HOST ?? "0.0.0.0";
+  const host = resolveBridgeHost(process.env.HOST ?? process.env.BRIDGE_HOST);
 
   const server = await startBridgeServer({
     port,
@@ -13,7 +14,7 @@ async function main(): Promise<void> {
     stateFilePath: process.env.BRIDGE_STATE_PATH ?? join(process.cwd(), ".codex-browser-bridge", "sessions.json"),
   });
 
-  console.log(`[bridge] Listening on http://${host}:${server.port}`);
+  console.log(`[bridge] Listening on ${formatListenUrl(host, server.port)}`);
   console.log(`[bridge] Viewer: http://127.0.0.1:${server.port}/`);
   console.log(`[bridge] Health: http://127.0.0.1:${server.port}/health`);
 

@@ -64,6 +64,7 @@ export function renderViewerHtml(): string {
       border-radius: 24px;
       box-shadow: var(--shadow);
       backdrop-filter: blur(12px);
+      min-width: 0;
       overflow: hidden;
     }
 
@@ -315,6 +316,7 @@ export function renderViewerHtml(): string {
 
     .session-button {
       width: 100%;
+      min-width: 0;
       text-align: left;
       padding: 14px 16px;
       border-radius: 18px;
@@ -414,6 +416,9 @@ export function renderViewerHtml(): string {
       font-size: 15px;
       font-weight: 700;
       color: var(--ink);
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .session-title-row {
@@ -426,6 +431,8 @@ export function renderViewerHtml(): string {
     .session-title-group {
       display: flex;
       align-items: baseline;
+      flex: 1 1 auto;
+      flex-wrap: wrap;
       gap: 8px;
       min-width: 0;
     }
@@ -488,6 +495,8 @@ export function renderViewerHtml(): string {
       font-size: 12px;
       color: var(--muted);
       line-height: 1.5;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
 
     .viewer {
@@ -586,11 +595,13 @@ export function renderViewerHtml(): string {
       display: grid;
       gap: 12px;
       align-content: start;
+      min-width: 0;
       overflow: auto;
     }
 
     .message-card,
     .conversation-collapse {
+      min-width: 0;
       border: 1px solid var(--line);
       border-radius: 18px;
       background: rgba(255,255,255,0.82);
@@ -613,7 +624,10 @@ export function renderViewerHtml(): string {
     }
 
     .message-body {
+      min-width: 0;
       white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
       line-height: 1.6;
       position: relative;
     }
@@ -2019,7 +2033,7 @@ export function renderViewerHtml(): string {
         renderSessionList();
       }
       if (state.selectedSessionId) {
-        renderMessages();
+        refreshMessageRelativeTimestamps();
       }
     }, 1000);
 
@@ -2203,6 +2217,17 @@ export function renderViewerHtml(): string {
       const rendered = blocks.slice().reverse().map((block) => renderConversationBlock(block, session.sessionId));
       messages.replaceChildren(...rendered);
       syncExpandableFinalAnswerCards();
+      refreshMessageRelativeTimestamps();
+    }
+
+    function refreshMessageRelativeTimestamps() {
+      Array.from(messages.querySelectorAll(".message-timestamp[data-timestamp]")).forEach((item) => {
+        const timestamp = item instanceof HTMLElement ? item : null;
+        if (!timestamp) {
+          return;
+        }
+        timestamp.textContent = formatRelativeTime(timestamp.dataset.timestamp || "");
+      });
     }
 
     function buildDisplayEntries(history) {
@@ -2437,6 +2462,7 @@ export function renderViewerHtml(): string {
       if (relativeTimestamp) {
         const timestamp = document.createElement("span");
         timestamp.className = "message-timestamp";
+        timestamp.dataset.timestamp = String(item.timestamp || "");
         timestamp.textContent = relativeTimestamp;
         header.appendChild(timestamp);
       }

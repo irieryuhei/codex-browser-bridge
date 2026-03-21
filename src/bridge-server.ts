@@ -67,6 +67,7 @@ type ClientMessage =
   | { type: "answer"; sessionId: string; toolUseId: string; result: string }
   | { type: "list_sessions" }
   | { type: "get_history"; sessionId: string }
+  | { type: "get_collapsed_turn"; sessionId: string; collapsedTurnKey: string }
   | { type: "set_session_pin"; sessionId: string; pinned: boolean }
   | { type: "set_session_completion"; sessionId: string; completed: boolean };
 
@@ -88,6 +89,26 @@ interface AssistantMessage {
   content: Array<AssistantTextContent | AssistantToolUseContent>;
   model: string;
   phase?: "commentary" | "final_answer";
+  collapsedTurnKey?: string;
+  collapsedTurnCount?: number;
+}
+
+interface DisplayEntry {
+  role: "user" | "thinking" | "draft" | "assistant" | "error";
+  text: string;
+  timestamp: string;
+  phase?: "commentary" | "final_answer" | null;
+  id?: string;
+}
+
+interface CollectedCollapsedTurn {
+  key: string;
+  entries: DisplayEntry[];
+}
+
+interface ResolvedCollapsedTurn {
+  key: string;
+  messages: HistoryMessage[];
 }
 
 interface HistoryBase {
@@ -497,13 +518,42 @@ export async function startBridgeServer(
           send(ws, { type: "error", message: `Session ${message.sessionId} was not found.` });
           return;
         }
-        const storedHistory = session.codexSession || options.codexSessionRoot === null
-          ? []
-          : await getStoredCodexSessionHistory(message.sessionId, options.codexSessionRoot);
+        const storedHistory = await resolveRawSessionHistory(session, options.codexSessionRoot);
+        const { visibleMessages } = collectVisibleHistoryAndCollapsedTurns(storedHistory);
         send(ws, {
           type: "history",
           sessionId: session.sessionId,
-          messages: storedHistory.length > 0 ? storedHistory : session.history,
+          messages: visibleMessages,
+        });
+        return;
+      }
+
+      if (
+        message.type === "get_collapsed_turn"
+        && typeof message.sessionId === "string"
+        && typeof message.collapsedTurnKey === "string"
+      ) {
+        await syncStoredCodexSessions();
+        const session = sessions.get(message.sessionId);
+        if (!session) {
+          send(ws, { type: "error", message: `Session ${message.sessionId} was not found.` });
+          return;
+        }
+        const storedHistory = await resolveRawSessionHistory(session, options.codexSessionRoot);
+        const { collapsedTurns } = collectVisibleHistoryAndCollapsedTurns(storedHistory);
+        const collapsedTurn = collapsedTurns.get(message.collapsedTurnKey);
+        if (!collapsedTurn) {
+          send(ws, {
+            type: "error",
+            message: `Collapsed turn ${message.collapsedTurnKey} was not found for session ${message.sessionId}.`,
+          });
+          return;
+        }
+        send(ws, {
+          type: "collapsed_turn",
+          sessionId: session.sessionId,
+          collapsedTurnKey: collapsedTurn.key,
+          messages: collapsedTurn.messages,
         });
         return;
       }
@@ -870,6 +920,18 @@ function parseClientMessage(raw: string): ClientMessage | null {
     }
 
     if (
+      data.type === "get_collapsed_turn"
+      && typeof data.sessionId === "string"
+      && typeof data.collapsedTurnKey === "string"
+    ) {
+      return {
+        type: "get_collapsed_turn",
+        sessionId: data.sessionId,
+        collapsedTurnKey: data.collapsedTurnKey,
+      };
+    }
+
+    if (
       data.type === "set_session_pin"
       && typeof data.sessionId === "string"
       && typeof data.pinned === "boolean"
@@ -960,6 +1022,28 @@ function normalizeHistoryMessage(
   return null;
 }
 
+async function resolveRawSessionHistory(
+  session: SessionRecord,
+  codexSessionRoot?: string | null,
+): Promise<HistoryMessage[]> {
+  if (session.codexSession || codexSessionRoot === null) {
+    return session.history;
+  }
+
+  const storedHistory = await getStoredCodexSessionHistory(session.sessionId, codexSessionRoot);
+  return storedHistory.length > 0 ? storedHistory : session.history;
+}
+
+function collectVisibleHistoryAndCollapsedTurns(history: HistoryMessage[]): {
+  visibleMessages: HistoryMessage[];
+  collapsedTurns: Map<string, ResolvedCollapsedTurn>;
+} {
+  return {
+    visibleMessages: history,
+    collapsedTurns: new Map(),
+  };
+}
+
 function normalizeAssistantMessage(value: Record<string, unknown>): AssistantMessage | null {
   if (
     typeof value.id !== "string"
@@ -1002,6 +1086,12 @@ function normalizeAssistantMessage(value: Record<string, unknown>): AssistantMes
     model: value.model,
     ...(value.phase === "commentary" || value.phase === "final_answer"
       ? { phase: value.phase }
+      : {}),
+    ...(typeof value.collapsedTurnKey === "string"
+      ? { collapsedTurnKey: value.collapsedTurnKey }
+      : {}),
+    ...(typeof value.collapsedTurnCount === "number" && Number.isFinite(value.collapsedTurnCount)
+      ? { collapsedTurnCount: value.collapsedTurnCount }
       : {}),
   };
 }

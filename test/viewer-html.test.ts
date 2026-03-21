@@ -56,6 +56,29 @@ describe("renderViewerHtml", () => {
     expect(html).toContain("background: linear-gradient(135deg, #d97706, #b45309);");
   });
 
+  it("keeps narrow conversation lists wrap-safe for long session text", () => {
+    const html = renderViewerHtml();
+
+    expect(html).toContain(".panel {");
+    expect(html).toContain("min-width: 0;");
+    expect(html).toContain(".session-title-group {");
+    expect(html).toContain("flex-wrap: wrap;");
+    expect(html).toContain(".session-title {");
+    expect(html).toContain("overflow-wrap: anywhere;");
+    expect(html).toContain(".session-preview {");
+    expect(html).toContain("word-break: break-word;");
+  });
+
+  it("keeps conversation detail cards wrap-safe for long message text", () => {
+    const html = renderViewerHtml();
+
+    expect(html).toContain(".messages {");
+    expect(html).toContain(".message-card,");
+    expect(html).toContain(".message-body {");
+    expect(html).toContain("overflow-wrap: anywhere;");
+    expect(html).toContain("word-break: break-word;");
+  });
+
   it("starts sessions with the configured model, effort, and plan mode from the composer controls", () => {
     const viewer = bootViewer();
     const socket = viewer.socketAt(0);
@@ -1546,6 +1569,68 @@ describe("renderViewerHtml", () => {
     vi.advanceTimersByTime(1000);
 
     expect(viewer.messageBlocks()[0]?.textContent).toContain("1分前");
+  });
+
+  it("refreshes conversation detail timestamps in place without rerendering message nodes", () => {
+    vi.useFakeTimers();
+    let now = Date.parse("2026-03-15T00:00:12.000Z");
+    const viewer = bootViewer({ now: () => now });
+    const socket = viewer.socketAt(0);
+
+    socket.open();
+    socket.receive({
+      type: "session_list",
+      sessions: [
+        {
+          sessionId: "sess_a",
+          title: "Session A",
+          projectPath: "/workspace/a",
+          status: "idle",
+          answerState: "final_answer",
+          updatedAt: "2026-03-15T00:00:05.000Z",
+          model: "gpt-5.4",
+          modelReasoningEffort: "xhigh",
+          permissionMode: "default",
+          pinned: false,
+          completed: false,
+          preview: "",
+          queueLength: 0,
+        },
+      ],
+    });
+    viewer.sessionButtons()[0]?.click();
+
+    socket.receive({
+      type: "history",
+      sessionId: "sess_a",
+      messages: [
+        {
+          type: "assistant",
+          sessionId: "sess_a",
+          timestamp: "2026-03-15T00:00:06.000Z",
+          message: {
+            id: "msg_1",
+            role: "assistant",
+            model: "gpt-5.4",
+            phase: "final_answer",
+            content: [{ type: "text", text: "All good." }],
+          },
+        },
+      ],
+    });
+
+    const firstBlock = viewer.messageBlocks()[0] as HTMLElement;
+    const firstTimestamp = firstBlock.querySelector(".message-timestamp");
+    expect(firstBlock.textContent).toContain("6秒前");
+
+    now = Date.parse("2026-03-15T00:01:06.000Z");
+    vi.advanceTimersByTime(1000);
+
+    const secondBlock = viewer.messageBlocks()[0] as HTMLElement;
+    const secondTimestamp = secondBlock.querySelector(".message-timestamp");
+    expect(secondBlock).toBe(firstBlock);
+    expect(secondTimestamp).toBe(firstTimestamp);
+    expect(secondBlock.textContent).toContain("1分前");
   });
 
   it("keeps conversation details expanded across periodic rerenders", () => {

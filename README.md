@@ -44,6 +44,8 @@ npm start
 
 [http://127.0.0.1:8765/](http://127.0.0.1:8765/) を開いてください。
 
+既定では `::` で待ち受けるため、IPv4/IPv6 の両方からアクセスできます。待受先を固定したい場合は `HOST` または `BRIDGE_HOST` を指定してください。
+
 viewer は既定で same-origin の WebSocket URL を使います。必要ならブラウザ UI から Bridge URL を上書きできます。
 
 ## 開発時の watch 再起動
@@ -56,6 +58,15 @@ npm run dev
 ```
 
 `src/**/*.ts` を保存すると、`tsx watch` が bridge を再起動します。配布用の動作確認や本番相当の起動は従来どおり `npm run build && npm start` を使ってください。
+
+ターミナルを占有せずに bridge をバックグラウンド起動したい場合は、次のシェルを使ってください。
+
+```shell
+./scripts/start-bridge.sh
+./scripts/stop-bridge.sh
+```
+
+`start-bridge.sh` は `npm run build` の後に bridge をバックグラウンド起動します。既に起動中なら自動で停止してから再起動します。起動ログは `.codex-browser-bridge/run/bridge.log`、PID は `.codex-browser-bridge/run/bridge.pid` に保存されます。
 
 ## 動作確認
 
