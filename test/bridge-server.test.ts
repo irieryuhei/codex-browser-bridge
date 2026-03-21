@@ -111,6 +111,107 @@ describe("startBridgeServer", () => {
     expect(html).toContain('id="sessionsList"');
   });
 
+  it("serves the next viewer and its standalone assets", async () => {
+    const server = await startBridgeServer({
+      port: 0,
+      codexSessionRoot: null,
+      codexFactory: { startSession: async () => new FakeCodexSession() },
+    });
+    servers.push(server);
+
+    const [pageResponse, cssResponse, jsResponse] = await Promise.all([
+      fetch(`http://127.0.0.1:${server.port}/viewer-next/?session=thread_reload`),
+      fetch(`http://127.0.0.1:${server.port}/viewer-next/app.css`),
+      fetch(`http://127.0.0.1:${server.port}/viewer-next/app.js`),
+    ]);
+    const [html, css, js] = await Promise.all([
+      pageResponse.text(),
+      cssResponse.text(),
+      jsResponse.text(),
+    ]);
+
+    expect(pageResponse.status).toBe(200);
+    expect(html).toContain('href="/viewer-next/app.css"');
+    expect(html).toContain('src="/viewer-next/app.js"');
+    expect(html).toContain('id="sessionsList"');
+
+    expect(cssResponse.status).toBe(200);
+    expect(css).toContain(".layout {");
+    expect(css).toContain(".message-card.final");
+
+    expect(jsResponse.status).toBe(200);
+    expect(js).toContain('const connectionDot = document.getElementById("connectionDot")');
+    expect(js).toContain('type: "list_sessions"');
+  });
+
+  it("serves the next2 viewer and its standalone assets", async () => {
+    const server = await startBridgeServer({
+      port: 0,
+      codexSessionRoot: null,
+      codexFactory: { startSession: async () => new FakeCodexSession() },
+    });
+    servers.push(server);
+
+    const [pageResponse, cssResponse, jsResponse] = await Promise.all([
+      fetch(`http://127.0.0.1:${server.port}/viewer-next2/?session=thread_reload`),
+      fetch(`http://127.0.0.1:${server.port}/viewer-next2/app.css`),
+      fetch(`http://127.0.0.1:${server.port}/viewer-next2/app.js`),
+    ]);
+    const [html, css, js] = await Promise.all([
+      pageResponse.text(),
+      cssResponse.text(),
+      jsResponse.text(),
+    ]);
+
+    expect(pageResponse.status).toBe(200);
+    expect(html).toContain('href="/viewer-next2/app.css"');
+    expect(html).toContain('src="/viewer-next2/app.js"');
+    expect(html).toContain('id="sessionsList"');
+    expect(html).toContain('id="viewer2Layout"');
+
+    expect(cssResponse.status).toBe(200);
+    expect(css).toContain(".viewer2-layout {");
+    expect(css).toContain(".viewer2-card.final");
+
+    expect(jsResponse.status).toBe(200);
+    expect(js).toContain('const STORAGE_KEY = "codex-browser-bridge.viewer-next2"');
+    expect(js).toContain('type: "list_sessions"');
+  });
+
+  it("serves the next3 viewer and its standalone assets", async () => {
+    const server = await startBridgeServer({
+      port: 0,
+      codexSessionRoot: null,
+      codexFactory: { startSession: async () => new FakeCodexSession() },
+    });
+    servers.push(server);
+
+    const [pageResponse, cssResponse, jsResponse] = await Promise.all([
+      fetch(`http://127.0.0.1:${server.port}/viewer-next3/?session=thread_reload`),
+      fetch(`http://127.0.0.1:${server.port}/viewer-next3/app.css`),
+      fetch(`http://127.0.0.1:${server.port}/viewer-next3/app.js`),
+    ]);
+    const [html, css, js] = await Promise.all([
+      pageResponse.text(),
+      cssResponse.text(),
+      jsResponse.text(),
+    ]);
+
+    expect(pageResponse.status).toBe(200);
+    expect(html).toContain('href="/viewer-next3/app.css"');
+    expect(html).toContain('src="/viewer-next3/app.js"');
+    expect(html).toContain('id="n3Layout"');
+    expect(html).toContain('id="sessionsList"');
+
+    expect(cssResponse.status).toBe(200);
+    expect(css).toContain(".n3-layout {");
+    expect(css).toContain(".n3-message.final");
+
+    expect(jsResponse.status).toBe(200);
+    expect(js).toContain('const STORAGE_KEY = "codex-browser-bridge.viewer-next3"');
+    expect(js).toContain('type: "list_sessions"');
+  });
+
   it("starts sessions with model, effort, and plan mode, then exposes them in the session list", async () => {
     const calls: Array<Record<string, unknown>> = [];
     const codexSession = new FakeCodexSession("thread_plan");

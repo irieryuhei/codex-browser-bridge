@@ -44,6 +44,12 @@ npm start
 
 [http://127.0.0.1:8765/](http://127.0.0.1:8765/) を開いてください。
 
+新実装の viewer は [http://127.0.0.1:8765/viewer-next/](http://127.0.0.1:8765/viewer-next/) です。
+
+完全新規実装の viewer は [http://127.0.0.1:8765/viewer-next2/](http://127.0.0.1:8765/viewer-next2/) です。
+
+requirements-only の clean-room 再実装 viewer は [http://127.0.0.1:8765/viewer-next3/](http://127.0.0.1:8765/viewer-next3/) です。
+
 既定では `::` で待ち受けるため、IPv4/IPv6 の両方からアクセスできます。待受先を固定したい場合は `HOST` または `BRIDGE_HOST` を指定してください。
 
 viewer は既定で same-origin の WebSocket URL を使います。必要ならブラウザ UI から Bridge URL を上書きできます。
@@ -62,11 +68,11 @@ npm run dev
 ターミナルを占有せずに bridge をバックグラウンド起動したい場合は、次のシェルを使ってください。
 
 ```shell
-./scripts/start-bridge.sh
-./scripts/stop-bridge.sh
+./scripts/bridge.sh
+./scripts/bridge.sh stop
 ```
 
-`start-bridge.sh` は `npm run build` の後に bridge をバックグラウンド起動します。既に起動中なら自動で停止してから再起動します。起動ログは `.codex-browser-bridge/run/bridge.log`、PID は `.codex-browser-bridge/run/bridge.pid` に保存されます。
+`./scripts/bridge.sh` は引数なしなら起動、`stop` を付けると停止します。起動時は `npm run build` の後に bridge をバックグラウンド起動し、既に起動中なら自動で停止してから再起動します。起動ログは `.codex-browser-bridge/run/bridge.log`、PID は `.codex-browser-bridge/run/bridge.pid` に保存されます。
 
 ## 動作確認
 
